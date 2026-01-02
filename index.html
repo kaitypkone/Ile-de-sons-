@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Île-de-Sens - Les Troubadours 2.0</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div class="app-container">
+
+        <!-- EN-TÊTE -->
+        <div class="app-header">
+            <img src="logo1.png" alt="Logo Île-de-Sens" class="app-logo">
+
+            <h1 class="app-title">Île-de-Sens</h1>
+            <div class="app-subtitle">Les Troubadours 2.0</div>
+        </div>
+
+        <!-- CONTENU PRINCIPAL -->
+        <div class="main-content">
+
+            <!-- SECTION CARTE -->
+            <div class="map-section">
+                <div id="main-map"></div>
+
+                <div class="map-controls">
+                    <button class="map-btn" id="locate-btn">🎯 Ma position</button>
+                    <button class="map-btn" id="explore-btn">🗺️ Explorer Paris</button>
+                </div>
+            </div>
+
+            <!-- PANNEAU MUSIQUES -->
+            <div class="songs-panel">
+
+                <div class="panel-header">
+                    <div class="header-content">
+                        <h2 class="panel-title">Bibliothèque Musicale</h2>
+                        <button class="btn-outline" id="refresh-btn">⟳ Actualiser</button>
+                    </div>
+                </div>
+
+                <div class="panel-tabs" role="tablist">
+                    <button class="tab-btn active" data-tab="songs-list" role="tab" aria-selected="true">
+                        🎵 Chansons
+                    </button>
+                    <button class="tab-btn" data-tab="add-song" role="tab" aria-selected="false">
+                        ➕ Ajouter
+                    </button>
+                </div>
+
+                <div class="tab-content">
+
+                    <!-- ONGLET CHANSONS -->
+                    <div id="songs-list" class="tab-pane active" role="tabpanel">
+
+                        <div class="search-bar">
+                            <input type="text" id="search-songs" class="search-input"
+                                   placeholder="🔍 Rechercher une chanson, un artiste ou un lieu...">
+                        </div>
+
+                        <div class="song-list" id="songs-list-container"></div>
+
+                        <div id="no-songs-message" style="display:none; text-align:center; padding:40px;">
+                            <h3>Aucune chanson trouvée</h3>
+                            <p>Ajoutez la première chanson !</p>
+                        </div>
+                    </div>
+
+                    <!-- ONGLET AJOUT -->
+                    <div id="add-song" class="tab-pane" role="tabpanel">
+
+                        <form class="add-song-form" id="song-form">
+
+                            <div class="form-group">
+                                <label class="form-label">Titre *</label>
+                                <input id="new-song-title" class="form-input" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Artiste *</label>
+                                <input id="new-song-artist" class="form-input" required>
+                            </div>
+
+                            <button type="submit" class="btn submit-btn" style="width:100%;">
+                                📨 Ajouter la chanson
+                            </button>
+
+                        </form>
+
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- JS -->
+    <script src="app.js"></script>
+
+</body>
+</html>
