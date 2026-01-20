@@ -1,111 +1,209 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Île-de-Sens - Les Troubadours 2.0</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Île-de-Sons</title>
 
-    <!-- Leaflet -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-    <!-- CSS -->
-    <link rel="stylesheet" href="styles.css">
+  <!-- CSS -->
+  <link rel="stylesheet" href="./styles.css" />
 </head>
+
 <body>
+  <div class="app">
 
-    <div class="app-container">
-
-        <!-- EN-TÊTE -->
-        <div class="app-header">
-            <img src="logo1.png" alt="Logo Île-de-Sens" class="app-logo">
-
-            <h1 class="app-title">Île-de-Sens</h1>
-            <div class="app-subtitle">Les Troubadours 2.0</div>
+    <!-- TOP BAR (overlay) -->
+    <header class="topbar">
+      <div class="brand">
+        <!-- Mets ton logo dans le dossier : logo.png -->
+        <img class="brand-logo" src="./logo.png" alt="Île-de-Sons" onerror="this.style.display='none'">
+        <div class="brand-text">
+          <div class="brand-title">Île-de-Sons</div>
+          <div class="brand-subtitle">Bibliothèque musicale</div>
         </div>
 
-        <!-- CONTENU PRINCIPAL -->
-        <div class="main-content">
-
-            <!-- SECTION CARTE -->
-            <div class="map-section">
-                <div id="main-map"></div>
-
-                <div class="map-controls">
-                    <button class="map-btn" id="locate-btn">🎯 Ma position</button>
-                    <button class="map-btn" id="explore-btn">🗺️ Explorer Paris</button>
-                </div>
-            </div>
-
-            <!-- PANNEAU MUSIQUES -->
-            <div class="songs-panel">
-
-                <div class="panel-header">
-                    <div class="header-content">
-                        <h2 class="panel-title">Bibliothèque Musicale</h2>
-                        <button class="btn-outline" id="refresh-btn">⟳ Actualiser</button>
-                    </div>
-                </div>
-
-                <div class="panel-tabs" role="tablist">
-                    <button class="tab-btn active" data-tab="songs-list" role="tab" aria-selected="true">
-                        🎵 Chansons
-                    </button>
-                    <button class="tab-btn" data-tab="add-song" role="tab" aria-selected="false">
-                        ➕ Ajouter
-                    </button>
-                </div>
-
-                <div class="tab-content">
-
-                    <!-- ONGLET CHANSONS -->
-                    <div id="songs-list" class="tab-pane active" role="tabpanel">
-
-                        <div class="search-bar">
-                            <input type="text" id="search-songs" class="search-input"
-                                   placeholder="🔍 Rechercher une chanson, un artiste ou un lieu...">
-                        </div>
-
-                        <div class="song-list" id="songs-list-container"></div>
-
-                        <div id="no-songs-message" style="display:none; text-align:center; padding:40px;">
-                            <h3>Aucune chanson trouvée</h3>
-                            <p>Ajoutez la première chanson !</p>
-                        </div>
-                    </div>
-
-                    <!-- ONGLET AJOUT -->
-                    <div id="add-song" class="tab-pane" role="tabpanel">
-
-                        <form class="add-song-form" id="song-form">
-
-                            <div class="form-group">
-                                <label class="form-label">Titre *</label>
-                                <input id="new-song-title" class="form-input" required>
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label">Artiste *</label>
-                                <input id="new-song-artist" class="form-input" required>
-                            </div>
-
-                            <button type="submit" class="btn submit-btn" style="width:100%;">
-                                📨 Ajouter la chanson
-                            </button>
-
-                        </form>
-
-                    </div>
-                </div>
-
-            </div>
+        <div class="stats-pill" id="total-pill" title="Chansons disponibles">
+          <div class="stats-label">Chansons dispo</div>
+          <div class="stats-value" id="total-songs">—</div>
         </div>
-    </div>
+      </div>
 
-    <!-- Leaflet -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+      <div class="search-row">
+        <div class="searchbar">
+          <span class="search-icon">🔎</span>
+          <input
+            id="search-input"
+            type="text"
+            placeholder="Rechercher un titre, artiste, commune, style…"
+            autocomplete="off"
+          />
+          <button id="clear-search" class="clear-btn" aria-label="Effacer">✕</button>
+        </div>
 
-    <!-- JS -->
-    <script src="app.js"></script>
+        <div class="top-actions">
+          <button id="btn-filters" class="btn soft">Filtres</button>
+          <button id="btn-locate" class="btn soft">Ma position</button>
+          <button id="btn-refresh" class="btn soft">Actualiser</button>
+        </div>
+      </div>
 
+      <div class="status" id="status">Prêt.</div>
+    </header>
+
+    <!-- MAP -->
+    <main class="map-wrap">
+      <div id="map" class="map"></div>
+
+      <!-- RESULT DRAWER (only when searching/filtering) -->
+      <section id="results-drawer" class="drawer hidden">
+        <div class="drawer-head">
+          <div class="drawer-title">
+            Résultats <span class="count-pill" id="results-count">0</span>
+          </div>
+          <button id="drawer-close" class="icon-btn" aria-label="Fermer">✕</button>
+        </div>
+        <div id="results-list" class="results"></div>
+        <div id="no-results" class="empty hidden">Aucun résultat.</div>
+      </section>
+
+      <!-- SONG SHEET -->
+      <section id="song-sheet" class="sheet hidden">
+        <div class="sheet-handle"></div>
+        <div class="sheet-content">
+          <div class="sheet-top">
+            <div>
+              <div class="sheet-title" id="sheet-title">Titre</div>
+              <div class="sheet-meta" id="sheet-meta">Artiste • Année</div>
+              <div class="sheet-place" id="sheet-place">📍 Lieu</div>
+            </div>
+            <button id="sheet-close" class="icon-btn" aria-label="Fermer">✕</button>
+          </div>
+
+          <div class="sheet-quote" id="sheet-quote"></div>
+
+          <div class="sheet-actions">
+            <button id="sheet-youtube" class="btn primary">YouTube</button>
+            <a id="sheet-lyrics" class="btn soft" target="_blank" rel="noopener">Paroles</a>
+            <button id="sheet-zoom" class="btn soft">Carte</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- FILTER PANEL -->
+      <section id="filters-panel" class="panel hidden" aria-hidden="true">
+        <div class="panel-head">
+          <div class="panel-title">Recherche avancée</div>
+          <button id="filters-close" class="icon-btn" aria-label="Fermer">✕</button>
+        </div>
+
+        <div class="panel-grid">
+          <div class="field">
+            <label>Commune</label>
+            <select id="f-commune">
+              <option value="">Toutes les communes</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Style</label>
+            <select id="f-style">
+              <option value="">Tous les styles</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Année (min)</label>
+            <input id="f-year-min" type="number" placeholder="ex: 2000" />
+          </div>
+
+          <div class="field">
+            <label>Année (max)</label>
+            <input id="f-year-max" type="number" placeholder="ex: 2025" />
+          </div>
+
+          <div class="field full">
+            <label>Département</label>
+            <select id="f-dept">
+              <option value="">Tous les départements</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="panel-actions">
+          <button id="filters-apply" class="btn primary">Appliquer</button>
+          <button id="filters-reset" class="btn soft">Réinitialiser</button>
+        </div>
+      </section>
+
+      <!-- ADD FORM (TAB) -->
+      <section id="add-panel" class="add hidden">
+        <div class="add-head">
+          <div class="add-title">Ajouter une chanson</div>
+          <button id="add-close" class="icon-btn" aria-label="Fermer">✕</button>
+        </div>
+
+        <form id="add-form" class="add-form">
+          <div class="field">
+            <label>Titre *</label>
+            <input id="a-title" required />
+          </div>
+          <div class="field">
+            <label>Artiste *</label>
+            <input id="a-artist" required />
+          </div>
+          <div class="field">
+            <label>Commune (lieu) *</label>
+            <input id="a-city" required />
+          </div>
+          <div class="field">
+            <label>Style</label>
+            <input id="a-style" placeholder="ex: rap, chanson..." />
+          </div>
+          <div class="field">
+            <label>Année</label>
+            <input id="a-year" type="number" placeholder="ex: 2024" />
+          </div>
+          <div class="field">
+            <label>Lien YouTube</label>
+            <input id="a-youtube" placeholder="https://www.youtube.com/watch?v=..." />
+          </div>
+          <div class="field">
+            <label>Lien paroles (Genius…)</label>
+            <input id="a-lyrics" placeholder="https://..." />
+          </div>
+          <div class="field">
+            <label>Extrait paroles</label>
+            <textarea id="a-quote" rows="3" placeholder="Une phrase..."></textarea>
+          </div>
+
+          <div class="add-hint">
+            Astuce : clique sur la carte pour choisir un point (latitude/longitude).
+            <div id="add-coords" class="coords">📍 Coordonnées : —</div>
+          </div>
+
+          <button class="btn primary wide" type="submit">Envoyer pour validation</button>
+          <div id="add-status" class="status">—</div>
+        </form>
+      </section>
+
+      <!-- BOTTOM NAV -->
+      <nav class="bottom-nav">
+        <button class="tab active" id="tab-explore">
+          <span class="tab-dot"></span> Explorer
+        </button>
+        <button class="tab" id="tab-library">Bibliothèque</button>
+        <button class="tab" id="tab-add">Ajouter</button>
+      </nav>
+    </main>
+  </div>
+
+  <!-- JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
+
