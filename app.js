@@ -31,13 +31,14 @@ let sb;
 // =====================
 // 1) DOM
 // =====================
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 const elStatus = $("status");
 const elTotalSongs = $("total-songs");
 
 const elSearch = $("search-input");
 const btnClear = $("clear-search");
+
 const btnFilters = $("btn-filters");
 const btnLocate = $("btn-locate");
 const btnRefresh = $("btn-refresh");
@@ -60,10 +61,10 @@ const shZoom = $("sheet-zoom");
 
 const filtersPanel = $("filters-panel");
 const filtersClose = $("filters-close");
-const fCommune = $("f-commune");
-const fStyle = $("f-style");      // style conservé
-const fLanguage = $("f-style");   // même select, multi-usage
-const fArtist = $("f-dept");      // on réutilise le champ département pour artiste
+
+const fCommune = $("f-commune");  // commune
+const fStyle = $("f-style");      // style
+const fArtist = $("f-dept");      // on RÉUTILISE "département" comme ARTISTE (visuellement ça reste écrit Département dans ton HTML)
 
 const fYearMin = $("f-year-min");
 const fYearMax = $("f-year-max");
@@ -84,6 +85,7 @@ const addCoords = $("add-coords");
 const aTitle = $("a-title");
 const aArtist = $("a-artist");
 const aCity = $("a-city");
+const aStyle = $("a-style");
 const aYear = $("a-year");
 const aYoutube = $("a-youtube");
 const aLyrics = $("a-lyrics");
@@ -101,75 +103,102 @@ let currentSong = null;
 // =====================
 // 3) HELPERS
 // =====================
-const safe = v => (v ?? "").toString();
-const norm = s => safe(s).toLowerCase().trim();
+const safe = (v) => (v ?? "").toString();
+const norm = (s) => safe(s).toLowerCase().trim();
 
-const titleOf = s => safe(s.title) || safe(s.full_title) || "Sans titre";
-const artistOf = s => safe(s.main_artist) || safe(s.artist_names) || "Artiste inconnu";
-const placeOf = s => safe(s.place) || "Lieu";
+const titleOf = (s) => safe(s.title) || safe(s.full_title) || "Sans titre";
+const artistOf = (s) => safe(s.main_artist) || safe(s.artist_names) || "Artiste inconnu";
+const placeOf = (s) => safe(s.place) || "Lieu";
+const langOf = (s) => safe(s.language);
 
 function ytOf(song){
-  if (song.youtube_url) return song.youtube_url;
-  if (song.youtube_embed){
-    const m = song.youtube_embed.match(/embed\/([^?&]+)/);
-    if (m) return `https://www.youtube.com/watch?v=${m[1]}`;
+  const yt = safe(song.youtube_url).trim();
+  if (yt) return yt;
+
+  const embed = safe(song.youtube_embed).trim();
+  if (embed){
+    const m = embed.match(/embed\/([^?&]+)/);
+    if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
   }
   return "";
 }
 
 function showStatus(msg){
-  elStatus.textContent = msg;
+  if (elStatus) elStatus.textContent = msg;
+  console.log("[status]", msg);
+}
+
+function numYear(song){
+  const y = Number(safe(song.annee));
+  return Number.isFinite(y) ? y : null;
 }
 
 // =====================
 // 4) MAP
 // =====================
 function initMap(){
-  map = L.map("map").setView([48.8566, 2.3522], 10);
+  map = L.map("map", { zoomControl: true }).setView([48.8566, 2.3522], 10);
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap"
+    attribution: "© OpenStreetMap contributors",
   }).addTo(map);
 
   markersLayer = L.layerGroup().addTo(map);
 
-  map.on("click", e => {
-    selectedCoords = e.latlng;
-    addCoords.textContent =
-      `📍 ${selectedCoords.lat.toFixed(5)}, ${selectedCoords.lng.toFixed(5)}`;
+  map.on("click", (e) => {
+    selectedCoords = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (addCoords){
+      addCoords.textContent = `📍 Coordonnées : ${selectedCoords.lat.toFixed(5)}, ${selectedCoords.lng.toFixed(5)}`;
+    }
   });
 
+  // important pour layout overlay
   setTimeout(() => map.invalidateSize(), 300);
+
+  showStatus("Carte prête.");
 }
 
 // =====================
-// 5) MARKERS 🎵 (PAS DE ROND, PAS DE PUNAISE)
+// 5) MARKERS (🎵 SEUL, SANS POINT)
 // =====================
 function drawMarkers(songs){
   markersLayer.clearLayers();
 
-  songs.forEach(song => {
-    if (!song.latitude || !song.longitude) return;
+  songs.forEach((song) => {
+    const lat = song.latitude;
+    const lng = song.longitude;
+    if (lat === null || lat === undefined || lng === null || lng === undefined) return;
 
+    // ✅ AUCUNE classe .song-dot => ton CSS ne peut rien dessiner derrière
     const icon = L.divIcon({
       className: "",
       html: `
-        <div style="
+        <span style="
+          display:inline-block;
           font-size:22px;
-          color:#ff66c4;
-          text-shadow:0 6px 14px rgba(255,102,196,.45);
+          line-height:22px;
           transform: translate(-50%, -50%);
-        ">🎵</div>
+          color: var(--pink);
+          text-shadow: 0 6px 14px rgba(255,102,196,.45);
+          filter: drop-shadow(0 2px 6px rgba(255,102,196,.25));
+          user-select:none;
+        ">🎵</span>
       `,
-      iconSize: [30,30],
-      iconAnchor: [15,15]
+      iconSize: [22,22],
+      iconAnchor: [11,11]
     });
 
-    const marker = L.marker([song.latitude, song.longitude], { icon })
-      .addTo(markersLayer);
+    const marker = L.marker([lat, lng], { icon }).addTo(markersLayer);
 
     marker.on("click", () => openSongSheet(song));
   });
+}
+
+function zoomToSong(song){
+  const lat = song.latitude;
+  const lng = song.longitude;
+  if (lat === null || lat === undefined || lng === null || lng === undefined) return;
+  map.setView([lat, lng], 13);
 }
 
 // =====================
@@ -179,43 +208,64 @@ function openSongSheet(song){
   currentSong = song;
 
   shTitle.textContent = titleOf(song);
-  shMeta.textContent =
-    `${artistOf(song)}${song.annee ? " • " + song.annee : ""}`;
+  shMeta.textContent = `${artistOf(song)}${song.annee ? ` • ${song.annee}` : ""}`;
   shPlace.textContent = `📍 ${placeOf(song)}`;
 
-  const q = safe(song.lyrics);
-  shQuote.textContent = q ? `“${q.slice(0,180)}${q.length>180?"…":""}”` : "";
-  shQuote.style.display = q ? "block" : "none";
+  const txt = safe(song.lyrics).trim();
+  if (txt){
+    const q = txt.length > 180 ? txt.slice(0,180) + "…" : txt;
+    shQuote.textContent = `“${q}”`;
+    shQuote.style.display = "block";
+  }else{
+    shQuote.style.display = "none";
+  }
 
-  shLyrics.href = song.genius_url || "#";
-  shLyrics.style.display = song.genius_url ? "inline-flex" : "none";
+  const yt = ytOf(song);
+  shYoutube.disabled = !yt;
 
-  shYoutube.disabled = !ytOf(song);
+  const link = safe(song.genius_url).trim();
+  if (link){
+    shLyrics.href = link;
+    shLyrics.style.display = "inline-flex";
+  }else{
+    shLyrics.style.display = "none";
+  }
 
   sheet.classList.remove("hidden");
 }
 
-sheetClose.onclick = () => sheet.classList.add("hidden");
-
-shYoutube.onclick = () => {
-  if (currentSong){
-    const y = ytOf(currentSong);
-    if (y) window.open(y, "_blank");
-  }
-};
-
-shZoom.onclick = () => {
-  if (!currentSong) return;
-  map.setView([currentSong.latitude, currentSong.longitude], 13);
+function closeSongSheet(){
   sheet.classList.add("hidden");
-};
+  currentSong = null;
+}
+
+sheetClose.addEventListener("click", closeSongSheet);
+
+shYoutube.addEventListener("click", () => {
+  const url = currentSong ? ytOf(currentSong) : "";
+  if (url) window.open(url, "_blank", "noopener");
+});
+
+shZoom.addEventListener("click", () => {
+  if (!currentSong) return;
+  zoomToSong(currentSong);
+  closeSongSheet();
+});
 
 // =====================
-// 7) RESULTS
+// 7) RESULTS DRAWER
 // =====================
+function openDrawer(){
+  drawer.classList.remove("hidden");
+}
+function closeDrawer(){
+  drawer.classList.add("hidden");
+}
+drawerClose.addEventListener("click", closeDrawer);
+
 function renderResults(list){
   elResults.innerHTML = "";
-  elResultsCount.textContent = list.length;
+  elResultsCount.textContent = String(list.length);
 
   if (!list.length){
     elNoResults.classList.remove("hidden");
@@ -224,65 +274,304 @@ function renderResults(list){
   elNoResults.classList.add("hidden");
 
   list.forEach(song => {
-    const div = document.createElement("div");
-    div.className = "result-card";
-    div.innerHTML = `
-      <div class="rc-title">${titleOf(song)}</div>
-      <div class="rc-meta">${artistOf(song)} • ${placeOf(song)}</div>
+    const titre = titleOf(song);
+    const artiste = artistOf(song);
+    const lieu = placeOf(song);
+    const yt = ytOf(song);
+    const lyrics = safe(song.genius_url).trim();
+
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="rc-title">${titre}</div>
+      <div class="rc-meta">${artiste}${song.annee ? ` • ${song.annee}` : ""}${lieu ? ` • ${lieu}` : ""}${song.language ? ` • ${song.language}` : ""}</div>
+
       <div class="rc-actions">
-        <button class="btn soft">Voir</button>
+        ${yt ? `<button class="btn primary" data-yt="1">YouTube</button>` : ""}
+        ${lyrics ? `<a class="btn soft" href="${lyrics}" target="_blank" rel="noopener">Paroles</a>` : ""}
+        <button class="btn soft" data-open="1">Voir</button>
+        <button class="btn soft" data-zoom="1">Carte</button>
       </div>
     `;
-    div.querySelector("button").onclick = () => openSongSheet(song);
-    elResults.appendChild(div);
+
+    card.querySelector('[data-open="1"]').addEventListener("click", () => openSongSheet(song));
+    card.querySelector('[data-zoom="1"]').addEventListener("click", () => zoomToSong(song));
+
+    const ytBtn = card.querySelector('[data-yt="1"]');
+    if (ytBtn) ytBtn.addEventListener("click", () => window.open(yt, "_blank", "noopener"));
+
+    elResults.appendChild(card);
   });
 }
 
 // =====================
-// 8) FILTERS (COMMUNE + STYLE + ANNÉES + LANGUE + ARTISTE)
+// 8) SEARCH + FILTERS (commune + style + annees + langue + artiste)
 // =====================
 function computeResults(){
   const q = norm(elSearch.value);
   const c = norm(fCommune.value);
   const st = norm(fStyle.value);
-  const lang = norm(fLanguage.value);
   const art = norm(fArtist.value);
   const ymin = Number(fYearMin.value || "");
   const ymax = Number(fYearMax.value || "");
 
-  const list = allSongs.filter(song => {
-    const hay = [
-      song.title,
-      song.full_title,
-      song.main_artist,
-      song.artist_names,
-      song.place,
-      song.style,
-      song.language,
-      song.lyrics,
-      song.decennie
-    ].map(norm).join(" ");
+  const hasFilters =
+    !!q || !!c || !!st || !!art || Number.isFinite(ymin) || Number.isFinite(ymax);
 
-    if (q && !hay.includes(q)) return false;
-    if (c && !norm(song.place).includes(c)) return false;
-    if (st && !norm(song.style).includes(st)) return false;
-    if (lang && !norm(song.language).includes(lang)) return false;
-    if (art && !norm(artistOf(song)).includes(art)) return false;
+  if (!hasFilters){
+    currentSong = null;
+    closeDrawer();
+    drawMarkers(allSongs);
+    showStatus(`✅ ${allSongs.length} chanson(s)`);
+    return;
+  }
 
-    const y = Number(song.annee);
-    if (Number.isFinite(ymin) && y < ymin) return false;
-    if (Number.isFinite(ymax) && y > ymax) return false;
+  let list = allSongs.slice();
 
-    return true;
-  });
+  if (q){
+    list = list.filter(song => {
+      const hay = [
+        song.title,
+        song.full_title,
+        song.main_artist,
+        song.artist_names,
+        song.place,
+        song.style,
+        song.language,
+        song.lyrics,
+        song.decennie
+      ].map(norm).join(" | ");
+      return hay.includes(q);
+    });
+  }
+
+  if (c){
+    list = list.filter(song => norm(song.place).includes(c));
+  }
+
+  if (st){
+    list = list.filter(song => norm(song.style).includes(st));
+  }
+
+  if (art){
+    list = list.filter(song => norm(artistOf(song)).includes(art));
+  }
+
+  if (Number.isFinite(ymin)){
+    list = list.filter(song => {
+      const y = numYear(song);
+      return y !== null && y >= ymin;
+    });
+  }
+
+  if (Number.isFinite(ymax)){
+    list = list.filter(song => {
+      const y = numYear(song);
+      return y !== null && y <= ymax;
+    });
+  }
 
   renderResults(list);
-  drawer.classList.remove("hidden");
+  openDrawer();
   drawMarkers(list);
+  showStatus(`✅ ${list.length} résultat(s)`);
 }
 
 // =====================
-// 9) LOAD
+// 9) FILTER OPTIONS
+// =====================
+function fillFilterOptions(songs){
+  const communes = new Set();
+  const styles = new Set();
+  const artists = new Set();
+
+  songs.forEach(s => {
+    const c = safe(s.place).trim();
+    if (c) communes.add(c);
+
+    const st = safe(s.style).trim();
+    if (st) styles.add(st.split(",")[0].trim());
+
+    const ar = artistOf(s).trim();
+    if (ar) artists.add(ar);
+  });
+
+  const sortFR = (a,b) => a.localeCompare(b, "fr", { sensitivity:"base" });
+
+  // reset lists
+  fCommune.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  fStyle.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  fArtist.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+
+  [...communes].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fCommune.appendChild(opt);
+  });
+
+  [...styles].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fStyle.appendChild(opt);
+  });
+
+  // ✅ f-dept devient ARTISTE (liste)
+  [...artists].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fArtist.appendChild(opt);
+  });
+
+  // ⚠️ On ne peut pas ajouter un select “Langue” sans modifier le HTML.
+  // La langue est déjà filtrable via la barre de recherche (q).
+}
+
+// =====================
+// 10) TOP BUTTONS
+// =====================
+btnRefresh.addEventListener("click", async () => {
+  showStatus("Actualisation...");
+  await loadSongs();
+  computeResults();
+});
+
+btnLocate.addEventListener("click", () => {
+  if (!navigator.geolocation){
+    alert("Géolocalisation non disponible.");
+    return;
+  }
+  btnLocate.disabled = true;
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      btnLocate.disabled = false;
+      map.setView([pos.coords.latitude, pos.coords.longitude], 13);
+    },
+    () => {
+      btnLocate.disabled = false;
+      alert("Impossible d'obtenir ta position.");
+    }
+  );
+});
+
+// =====================
+// 11) FILTER UI
+// =====================
+btnFilters.addEventListener("click", () => {
+  filtersPanel.classList.toggle("hidden");
+});
+
+filtersClose.addEventListener("click", () => {
+  filtersPanel.classList.add("hidden");
+});
+
+filtersApply.addEventListener("click", () => {
+  filtersPanel.classList.add("hidden");
+  computeResults();
+});
+
+filtersReset.addEventListener("click", () => {
+  fCommune.value = "";
+  fStyle.value = "";
+  fArtist.value = "";
+  fYearMin.value = "";
+  fYearMax.value = "";
+  filtersPanel.classList.add("hidden");
+  computeResults();
+});
+
+btnClear.addEventListener("click", () => {
+  elSearch.value = "";
+  computeResults();
+});
+
+elSearch.addEventListener("input", computeResults);
+
+// =====================
+// 12) TABS
+// =====================
+function setActiveTab(which){
+  [tabExplore, tabLibrary, tabAdd].forEach(t => t.classList.remove("active"));
+  if (which === "explore") tabExplore.classList.add("active");
+  if (which === "library") tabLibrary.classList.add("active");
+  if (which === "add") tabAdd.classList.add("active");
+}
+
+tabExplore.addEventListener("click", () => {
+  setActiveTab("explore");
+  addPanel.classList.add("hidden");
+  // Explorer: si filtres actifs -> drawer visible, sinon caché
+  // on ne force rien ici
+});
+
+tabLibrary.addEventListener("click", () => {
+  setActiveTab("library");
+  addPanel.classList.add("hidden");
+  renderResults(allSongs);
+  openDrawer();
+  drawMarkers(allSongs);
+  showStatus(`Bibliothèque : ${allSongs.length} chanson(s)`);
+});
+
+tabAdd.addEventListener("click", () => {
+  setActiveTab("add");
+  closeDrawer();
+  addPanel.classList.remove("hidden");
+});
+
+// =====================
+// 13) ADD FORM
+// =====================
+addClose.addEventListener("click", () => {
+  addPanel.classList.add("hidden");
+  setActiveTab("explore");
+});
+
+function setAddStatus(msg){
+  addStatus.textContent = msg;
+}
+
+addForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    titre: aTitle.value.trim(),
+    artiste: aArtist.value.trim(),
+    lieu_principal: aCity.value.trim(),
+    style: aStyle.value.trim() || null,
+    annee: aYear.value ? Number(aYear.value) : null,
+    lien_youtube: aYoutube.value.trim() || null,
+    lien: aLyrics.value.trim() || null,
+    extrait_paroles: aQuote.value.trim() || null,
+    latitude: selectedCoords ? selectedCoords.lat : null,
+    longitude: selectedCoords ? selectedCoords.lng : null,
+    status: "pending"
+  };
+
+  if (!payload.titre || !payload.artiste || !payload.lieu_principal){
+    setAddStatus("⚠️ Remplis Titre / Artiste / Commune.");
+    return;
+  }
+
+  setAddStatus("Envoi...");
+  const { error } = await sb.from(TABLE_SUGGEST).insert(payload);
+  if (error){
+    console.error(error);
+    setAddStatus("❌ Erreur : " + error.message);
+    return;
+  }
+
+  setAddStatus("✅ Envoyé ! (En attente de validation)");
+  addForm.reset();
+  selectedCoords = null;
+  addCoords.textContent = "📍 Coordonnées : —";
+});
+
+// =====================
+// 14) LOAD + INIT
 // =====================
 async function loadSongs(){
   const { data, error } = await sb
@@ -292,149 +581,37 @@ async function loadSongs(){
     .limit(1000);
 
   if (error){
-    showStatus("Erreur Supabase");
     console.error(error);
+    showStatus("Erreur Supabase: " + error.message);
     return;
   }
 
   allSongs = data || [];
-  elTotalSongs.textContent = allSongs.length;
+  elTotalSongs.textContent = String(allSongs.length);
+
   fillFilterOptions(allSongs);
   drawMarkers(allSongs);
-  showStatus("Prêt.");
+  closeDrawer();
+  showStatus(`✅ ${allSongs.length} chanson(s) chargée(s)`);
 }
 
-// =====================
-// 10) FILTER OPTIONS
-// =====================
-function fillFilterOptions(songs){
-  const communes = new Set();
-  const styles = new Set();
-  const languages = new Set();
-  const artists = new Set();
-
-  songs.forEach(s => {
-    if (s.place) communes.add(s.place);
-    if (s.style) styles.add(s.style);
-    if (s.language) languages.add(s.language);
-    if (artistOf(s)) artists.add(artistOf(s));
-  });
-
-  [fCommune, fStyle, fLanguage, fArtist].forEach(sel =>
-    sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove())
-  );
-
-  [...communes].sort().forEach(v => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = v;
-    fCommune.appendChild(o);
-  });
-
-  [...styles].sort().forEach(v => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = v;
-    fStyle.appendChild(o);
-  });
-
-  [...languages].sort().forEach(v => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = v;
-    fLanguage.appendChild(o);
-  });
-
-  [...artists].sort().forEach(v => {
-    const o = document.createElement("option");
-    o.value = v; o.textContent = v;
-    fArtist.appendChild(o);
-  });
-}
-
-// =====================
-// 11) EVENTS
-// =====================
-elSearch.oninput = computeResults;
-btnClear.onclick = () => { elSearch.value=""; drawer.classList.add("hidden"); drawMarkers(allSongs); };
-
-btnFilters.onclick = () => filtersPanel.classList.toggle("hidden");
-filtersClose.onclick = () => filtersPanel.classList.add("hidden");
-filtersApply.onclick = () => { filtersPanel.classList.add("hidden"); computeResults(); };
-filtersReset.onclick = () => {
-  fCommune.value = "";
-  fStyle.value = "";
-  fLanguage.value = "";
-  fArtist.value = "";
-  fYearMin.value = "";
-  fYearMax.value = "";
-  drawer.classList.add("hidden");
-  drawMarkers(allSongs);
-};
-
-drawerClose.onclick = () => drawer.classList.add("hidden");
-
-btnLocate.onclick = () => {
-  navigator.geolocation?.getCurrentPosition(p => {
-    map.setView([p.coords.latitude, p.coords.longitude], 13);
-  });
-};
-
-btnRefresh.onclick = loadSongs;
-
-tabExplore.onclick = () => {
-  addPanel.classList.add("hidden");
-};
-
-tabLibrary.onclick = () => {
-  renderResults(allSongs);
-  drawer.classList.remove("hidden");
-};
-
-tabAdd.onclick = () => {
-  drawer.classList.add("hidden");
-  addPanel.classList.remove("hidden");
-};
-
-addClose.onclick = () => addPanel.classList.add("hidden");
-
-// =====================
-// 12) ADD FORM
-// =====================
-addForm.onsubmit = async e => {
-  e.preventDefault();
-
-  const payload = {
-    titre: aTitle.value.trim(),
-    artiste: aArtist.value.trim(),
-    lieu_principal: aCity.value.trim(),
-    annee: aYear.value || null,
-    lien_youtube: aYoutube.value.trim() || null,
-    lien: aLyrics.value.trim() || null,
-    extrait_paroles: aQuote.value.trim() || null,
-    latitude: selectedCoords?.lat || null,
-    longitude: selectedCoords?.lng || null,
-    status: "pending"
-  };
-
-  if (!payload.titre || !payload.artiste || !payload.lieu_principal){
-    addStatus.textContent = "⚠️ Champs obligatoires manquants";
-    return;
-  }
-
-  addStatus.textContent = "Envoi...";
-  await sb.from(TABLE_SUGGEST).insert(payload);
-  addStatus.textContent = "✅ Envoyé";
-
-  addForm.reset();
-  selectedCoords = null;
-  addCoords.textContent = "📍 Coordonnées : —";
-};
-
-// =====================
-// 13) INIT
-// =====================
 async function init(){
-  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  initMap();
-  await loadSongs();
+  try{
+    if (!window.supabase?.createClient){
+      showStatus("Erreur: supabase-js non chargé.");
+      return;
+    }
+
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    initMap();
+    setActiveTab("explore");
+    await loadSongs();
+
+  }catch(e){
+    console.error(e);
+    showStatus("Erreur: " + (e?.message || e));
+  }
 }
 
 init();
