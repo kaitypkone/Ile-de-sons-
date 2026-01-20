@@ -14,14 +14,15 @@ const COLS = `
   main_artist,
   artist_names,
   style,
+  language,
   annee,
   place,
   lyrics,
   genius_url,
   youtube_url,
   youtube_embed,
-  longitude,
   latitude,
+  longitude,
   decennie
 `;
 
@@ -60,7 +61,10 @@ const shZoom = $("sheet-zoom");
 const filtersPanel = $("filters-panel");
 const filtersClose = $("filters-close");
 const fCommune = $("f-commune");
-const fStyle = $("f-style");
+const fStyle = $("f-style");      // style conservé
+const fLanguage = $("f-style");   // même select, multi-usage
+const fArtist = $("f-dept");      // on réutilise le champ département pour artiste
+
 const fYearMin = $("f-year-min");
 const fYearMax = $("f-year-max");
 
@@ -80,7 +84,6 @@ const addCoords = $("add-coords");
 const aTitle = $("a-title");
 const aArtist = $("a-artist");
 const aCity = $("a-city");
-const aStyle = $("a-style");
 const aYear = $("a-year");
 const aYoutube = $("a-youtube");
 const aLyrics = $("a-lyrics");
@@ -90,7 +93,6 @@ const aQuote = $("a-quote");
 // 2) STATE
 // =====================
 let allSongs = [];
-let currentResults = [];
 let map;
 let markersLayer;
 let selectedCoords = null;
@@ -141,7 +143,7 @@ function initMap(){
 }
 
 // =====================
-// 5) MARKERS (🎵 ROSE, PAS DE PUNAISE BLEUE)
+// 5) MARKERS 🎵 (PAS DE ROND, PAS DE PUNAISE)
 // =====================
 function drawMarkers(songs){
   markersLayer.clearLayers();
@@ -151,9 +153,16 @@ function drawMarkers(songs){
 
     const icon = L.divIcon({
       className: "",
-      html: `<div class="song-dot">🎵</div>`,
-      iconSize: [28, 28],
-      iconAnchor: [14, 14]
+      html: `
+        <div style="
+          font-size:22px;
+          color:#ff66c4;
+          text-shadow:0 6px 14px rgba(255,102,196,.45);
+          transform: translate(-50%, -50%);
+        ">🎵</div>
+      `,
+      iconSize: [30,30],
+      iconAnchor: [15,15]
     });
 
     const marker = L.marker([song.latitude, song.longitude], { icon })
@@ -230,16 +239,18 @@ function renderResults(list){
 }
 
 // =====================
-// 8) FILTERS / SEARCH
+// 8) FILTERS (COMMUNE + STYLE + ANNÉES + LANGUE + ARTISTE)
 // =====================
 function computeResults(){
   const q = norm(elSearch.value);
   const c = norm(fCommune.value);
-  const s = norm(fStyle.value);
+  const st = norm(fStyle.value);
+  const lang = norm(fLanguage.value);
+  const art = norm(fArtist.value);
   const ymin = Number(fYearMin.value || "");
   const ymax = Number(fYearMax.value || "");
 
-  let list = allSongs.filter(song => {
+  const list = allSongs.filter(song => {
     const hay = [
       song.title,
       song.full_title,
@@ -247,13 +258,16 @@ function computeResults(){
       song.artist_names,
       song.place,
       song.style,
+      song.language,
       song.lyrics,
       song.decennie
     ].map(norm).join(" ");
 
     if (q && !hay.includes(q)) return false;
     if (c && !norm(song.place).includes(c)) return false;
-    if (s && !norm(song.style).includes(s)) return false;
+    if (st && !norm(song.style).includes(st)) return false;
+    if (lang && !norm(song.language).includes(lang)) return false;
+    if (art && !norm(artistOf(song)).includes(art)) return false;
 
     const y = Number(song.annee);
     if (Number.isFinite(ymin) && y < ymin) return false;
@@ -262,7 +276,6 @@ function computeResults(){
     return true;
   });
 
-  currentResults = list;
   renderResults(list);
   drawer.classList.remove("hidden");
   drawMarkers(list);
@@ -297,14 +310,19 @@ async function loadSongs(){
 function fillFilterOptions(songs){
   const communes = new Set();
   const styles = new Set();
+  const languages = new Set();
+  const artists = new Set();
 
   songs.forEach(s => {
     if (s.place) communes.add(s.place);
-    if (s.style) styles.add(s.style.split(",")[0].trim());
+    if (s.style) styles.add(s.style);
+    if (s.language) languages.add(s.language);
+    if (artistOf(s)) artists.add(artistOf(s));
   });
 
-  fCommune.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
-  fStyle.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  [fCommune, fStyle, fLanguage, fArtist].forEach(sel =>
+    sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove())
+  );
 
   [...communes].sort().forEach(v => {
     const o = document.createElement("option");
@@ -317,10 +335,22 @@ function fillFilterOptions(songs){
     o.value = v; o.textContent = v;
     fStyle.appendChild(o);
   });
+
+  [...languages].sort().forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    fLanguage.appendChild(o);
+  });
+
+  [...artists].sort().forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    fArtist.appendChild(o);
+  });
 }
 
 // =====================
-// 11) EVENTS (TOUT ACTIF)
+// 11) EVENTS
 // =====================
 elSearch.oninput = computeResults;
 btnClear.onclick = () => { elSearch.value=""; drawer.classList.add("hidden"); drawMarkers(allSongs); };
@@ -331,6 +361,8 @@ filtersApply.onclick = () => { filtersPanel.classList.add("hidden"); computeResu
 filtersReset.onclick = () => {
   fCommune.value = "";
   fStyle.value = "";
+  fLanguage.value = "";
+  fArtist.value = "";
   fYearMin.value = "";
   fYearMax.value = "";
   drawer.classList.add("hidden");
@@ -348,27 +380,20 @@ btnLocate.onclick = () => {
 btnRefresh.onclick = loadSongs;
 
 tabExplore.onclick = () => {
-  setActiveTab("explore");
   addPanel.classList.add("hidden");
 };
 
 tabLibrary.onclick = () => {
-  setActiveTab("library");
-  currentResults = allSongs.slice();
-  renderResults(currentResults);
+  renderResults(allSongs);
   drawer.classList.remove("hidden");
 };
 
 tabAdd.onclick = () => {
-  setActiveTab("add");
   drawer.classList.add("hidden");
   addPanel.classList.remove("hidden");
 };
 
-addClose.onclick = () => {
-  addPanel.classList.add("hidden");
-  setActiveTab("explore");
-};
+addClose.onclick = () => addPanel.classList.add("hidden");
 
 // =====================
 // 12) ADD FORM
@@ -380,7 +405,6 @@ addForm.onsubmit = async e => {
     titre: aTitle.value.trim(),
     artiste: aArtist.value.trim(),
     lieu_principal: aCity.value.trim(),
-    style: aStyle.value.trim() || null,
     annee: aYear.value || null,
     lien_youtube: aYoutube.value.trim() || null,
     lien: aLyrics.value.trim() || null,
