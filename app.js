@@ -179,8 +179,6 @@ function drawMarkers(songs){
           line-height:22px;
           transform: translate(-50%, -50%);
           color: var(--pink);
-          text-shadow: 0 6px 14px rgba(255,102,196,.45);
-          filter: drop-shadow(0 2px 6px rgba(255,102,196,.25));
           user-select:none;
         ">🎵</span>
       `,
@@ -615,3 +613,4 @@ async function init(){
 }
 
 init();
+
