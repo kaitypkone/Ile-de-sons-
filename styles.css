@@ -424,15 +424,6 @@ body{
   .stats-pill{ display:none; }
 }
 
-/* ✅ Marker rose (rond) */
-.song-dot{
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--pink);
-  border: 2px solid rgba(255,255,255,.9);
-  box-shadow: 0 10px 24px rgba(255,102,196,.35);
-}
 
 /* petit effet au survol */
 .song-dot:hover{
@@ -448,3 +439,4 @@ body{
   70%  { box-shadow: 0 0 0 14px rgba(255,102,196,0); }
   100% { box-shadow: 0 0 0 0 rgba(255,102,196,0); }
 }
+
