@@ -1,411 +1,655 @@
-// ===============================
-// Île-de-sons — app.js (à jour)
-// CSV: ile_de_sons.csv à la racine du dépôt
-// ===============================
+// =====================
+// 0) SUPABASE CONFIG
+// =====================
+const SUPABASE_URL = "https://votckpjacugwoqowjcow.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_kzB2e_oa8VfzGCYlyELKng_YYV8_zJd";
 
-// Variables globales
-let mainMap, userMarker, songMarkers = [];
-let currentPosition = { lat: 48.8566, lng: 2.3522 }; // Paris par défaut
-let selectedPosition = null;
+const TABLE_SONGS = "songs";
+const TABLE_SUGGEST = "suggestions"; // pour "Ajouter" (en attente)
 
-// Données chansons (alimentées depuis CSV)
-let sampleSongs = [];
+const COLS = `
+  id_text,
+  titre,
+  artiste,
+  style,
+  annee,
+  lieu_principal,
+  code_departement,
+  extrait_paroles,
+  lien,
+  lien_youtube,
+  youtube_embed,
+  longitude,
+  latitude
+`;
 
-// ---------- Utils DOM (anti-crash) ----------
-function $(id) { return document.getElementById(id); }
+let sb;
 
-function on(id, event, handler) {
-  const el = $(id);
-  if (el) el.addEventListener(event, handler);
+// =====================
+// 1) DOM
+// =====================
+const elStatus = document.getElementById("status");
+
+const elTotalSongs = document.getElementById("total-songs");
+
+const elSearch = document.getElementById("search-input");
+const btnClear = document.getElementById("clear-search");
+
+const btnFilters = document.getElementById("btn-filters");
+const btnLocate = document.getElementById("btn-locate");
+const btnRefresh = document.getElementById("btn-refresh");
+
+const drawer = document.getElementById("results-drawer");
+const drawerClose = document.getElementById("drawer-close");
+const elResults = document.getElementById("results-list");
+const elNoResults = document.getElementById("no-results");
+const elResultsCount = document.getElementById("results-count");
+
+const sheet = document.getElementById("song-sheet");
+const sheetClose = document.getElementById("sheet-close");
+const shTitle = document.getElementById("sheet-title");
+const shMeta = document.getElementById("sheet-meta");
+const shPlace = document.getElementById("sheet-place");
+const shQuote = document.getElementById("sheet-quote");
+const shYoutube = document.getElementById("sheet-youtube");
+const shLyrics = document.getElementById("sheet-lyrics");
+const shZoom = document.getElementById("sheet-zoom");
+
+const filtersPanel = document.getElementById("filters-panel");
+const filtersClose = document.getElementById("filters-close");
+const fCommune = document.getElementById("f-commune");
+const fStyle = document.getElementById("f-style");
+const fYearMin = document.getElementById("f-year-min");
+const fYearMax = document.getElementById("f-year-max");
+const fDept = document.getElementById("f-dept");
+const filtersApply = document.getElementById("filters-apply");
+const filtersReset = document.getElementById("filters-reset");
+
+const tabExplore = document.getElementById("tab-explore");
+const tabLibrary = document.getElementById("tab-library");
+const tabAdd = document.getElementById("tab-add");
+
+const addPanel = document.getElementById("add-panel");
+const addClose = document.getElementById("add-close");
+const addForm = document.getElementById("add-form");
+const addStatus = document.getElementById("add-status");
+const addCoords = document.getElementById("add-coords");
+
+const aTitle = document.getElementById("a-title");
+const aArtist = document.getElementById("a-artist");
+const aCity = document.getElementById("a-city");
+const aStyle = document.getElementById("a-style");
+const aYear = document.getElementById("a-year");
+const aYoutube = document.getElementById("a-youtube");
+const aLyrics = document.getElementById("a-lyrics");
+const aQuote = document.getElementById("a-quote");
+
+// =====================
+// 2) STATE
+// =====================
+let allSongs = [];
+let currentResults = [];
+let isSearchActive = false;
+
+let map;
+let markersLayer;
+let selectedCoords = null; // click map for add
+
+let currentSong = null;
+
+// =====================
+// 3) HELPERS
+// =====================
+function safe(v){ return (v ?? "").toString(); }
+
+function normalize(s){
+  return safe(s).toLowerCase().trim();
 }
 
-// ---------- Chargement CSV ----------
-async function loadSongsFromCSV() {
-  const res = await fetch("ile_de_sons.csv", { cache: "no-store" });
-  if (!res.ok) throw new Error(`CSV introuvable: ${res.status} ${res.statusText}`);
+function showStatus(msg){
+  if (elStatus) elStatus.textContent = msg;
+  console.log("[status]", msg);
+}
 
-  const text = await res.text();
+function parseNum(v){
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(safe(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
 
-  // Gère Windows \r\n
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
+function getYoutubeWatchUrl(song){
+  const yt = safe(song.lien_youtube).trim();
+  if (yt) return yt;
 
-  // Excel FR => souvent ";"
-  const headers = lines.shift().split(";").map(h => h.trim());
+  const embed = safe(song.youtube_embed).trim();
+  const m = embed.match(/youtube\.com\/embed\/([^?&]+)/);
+  if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
+  return "";
+}
 
-  const rows = lines.map(line => {
-    const values = line.split(";");
-    const obj = {};
-    headers.forEach((h, i) => (obj[h] = (values[i] ?? "").trim()));
-    return obj;
+function getTagStyle(style){
+  const s = safe(style).trim();
+  if (!s) return "";
+  // garde un tag court
+  const first = s.split(",")[0].trim();
+  return first.length > 18 ? first.slice(0, 18) + "…" : first;
+}
+
+function setActiveTab(which){
+  [tabExplore, tabLibrary, tabAdd].forEach(t => t.classList.remove("active"));
+  if (which === "explore") tabExplore.classList.add("active");
+  if (which === "library") tabLibrary.classList.add("active");
+  if (which === "add") tabAdd.classList.add("active");
+}
+
+// =====================
+// 4) MAP
+// =====================
+function initMap(){
+  map = L.map("map", { zoomControl: true }).setView([48.8566, 2.3522], 10);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors",
+  }).addTo(map);
+
+  markersLayer = L.layerGroup().addTo(map);
+
+  map.on("click", (e) => {
+    selectedCoords = { lat: e.latlng.lat, lng: e.latlng.lng };
+    addCoords.textContent = `📍 Coordonnées : ${selectedCoords.lat.toFixed(5)}, ${selectedCoords.lng.toFixed(5)}`;
   });
 
-  // Helpers pour lire une colonne avec plusieurs noms possibles
-  const pick = (r, names) => {
-    for (const n of names) {
-      if (r[n] !== undefined && String(r[n]).trim() !== "") return String(r[n]).trim();
-    }
-    return "";
-  };
-
-  const toNum = (v) => {
-    const s = String(v ?? "").trim();
-    if (!s) return NaN;
-    // gère "2,3522"
-    return parseFloat(s.replace(",", "."));
-  };
-
-  // MAPPING colonnes Excel -> format app
-  // ⚠️ Si tes en-têtes sont différents, adapte la liste de noms ci-dessous.
-  const songs = rows
-    .map((r, idx) => {
-      const lat = toNum(pick(r, ["Latitude", "lat", "LAT", "Lat"]));
-      const lng = toNum(pick(r, ["Longitude", "lng", "LNG", "Long", "Lon"]));
-
-      return {
-        id: idx + 1,
-        title: pick(r, ["Titre", "title", "Chanson", "Nom", "Song"]) || "Sans titre",
-        artist: pick(r, ["Artiste", "artist"]) || "Artiste inconnu",
-        year: pick(r, ["Année", "Annee", "year"]),
-        location: pick(r, ["Lieu principal", "Lieu", "Commune", "Ville"]) || "Lieu inconnu",
-        lyrics: pick(r, ["Extrait des paroles", "Extrait", "Paroles", "Lyrics"]),
-        link: pick(r, ["Lien", "Link", "URL"]),
-        style: pick(r, ["Style", "Genre"]),
-        lat,
-        lng,
-        address: pick(r, ["Lieu principal", "Adresse", "Address", "Lieu"])
-      };
-    })
-    // garder uniquement les lignes géolocalisées
-    .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-
-  return songs;
+  showStatus("Carte prête.");
 }
 
-// ---------- Init ----------
-document.addEventListener('DOMContentLoaded', async function() {
-  // Init map
-  initMainMap();
-
-  // Events (avec garde-fou si l’élément n’existe pas)
-  on('locate-btn', 'click', locateUser);
-  on('explore-btn', 'click', exploreParis);
-  on('refresh-btn', 'click', refreshSongs);
-  on('song-form', 'submit', submitSong);
-  on('use-map-location', 'click', useMapLocation);
-  on('randomize-location', 'click', randomizeLocation);
-  on('search-songs', 'input', filterSongs);
-
-  // Tabs
-  setupTabs();
-
-  // Charger le CSV
-  try {
-    sampleSongs = await loadSongsFromCSV();
-  } catch (e) {
-    console.error("Erreur chargement CSV :", e);
-    alert("Impossible de charger ile_de_sons.csv. Vérifie le nom du fichier et le séparateur ';'.");
-    sampleSongs = [];
-  }
-
-  // Rendu
-  addSongMarkers();
-  loadAllSongs();
-});
-
-// ---------- Carte ----------
-function initMainMap() {
-  mainMap = L.map('main-map').setView([48.8566, 2.3522], 13);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors'
-  }).addTo(mainMap);
-
-  // clic carte = position sélectionnée
-  mainMap.on('click', function(e) {
-    selectedPosition = e.latlng;
-    updateMapLocation(selectedPosition.lat, selectedPosition.lng);
-  });
+function clearMarkers(){
+  markersLayer.clearLayers();
 }
 
-// Ajouter les marqueurs des chansons sur la carte
-function addSongMarkers() {
-  // Supprimer les anciens marqueurs
-  songMarkers.forEach(marker => mainMap.removeLayer(marker));
-  songMarkers = [];
-
-  if (!sampleSongs || sampleSongs.length === 0) return;
-
-  sampleSongs.forEach(song => {
-    const popupHTML = `
-      <div style="min-width: 230px; background: #fffdd4; padding: 15px; border-radius: 12px; border: 2px solid #ebcbff;">
-        <h4 style="margin: 0 0 8px 0; color: #e250bd; font-weight: 800;">${escapeHTML(song.title)}</h4>
-        <p style="margin: 0 0 6px 0; font-size: 0.9rem; color: #2d1b42;">
-          <strong>${escapeHTML(song.artist)}</strong> ${song.year ? `(${escapeHTML(song.year)})` : ""}
-        </p>
-        <p style="margin: 0 0 8px 0; font-size: 0.85rem; color: #2d1b42;">📍 ${escapeHTML(song.location)}</p>
-        ${song.lyrics ? `<p style="margin: 0; font-style: italic; font-size: 0.85rem; color: #2d1b42; background: rgba(183, 230, 255, 0.3); padding: 8px; border-radius: 6px;">"${escapeHTML(song.lyrics)}"</p>` : ""}
-        ${song.link ? `<p style="margin-top:10px;"><a href="${song.link}" target="_blank" rel="noopener">🎧 Ouvrir le lien</a></p>` : ""}
-      </div>
-    `;
-
-    const marker = L.marker([song.lat, song.lng]).addTo(mainMap).bindPopup(popupHTML);
-    songMarkers.push(marker);
-  });
-}
-
-// ---------- Géolocalisation ----------
-function locateUser() {
-  const locateBtn = $('locate-btn');
-  if (locateBtn) {
-    locateBtn.textContent = "📍 Localisation...";
-    locateBtn.disabled = true;
-  }
-
-  if (!navigator.geolocation) {
-    alert("La géolocalisation n'est pas supportée par votre navigateur.");
-    if (locateBtn) {
-      locateBtn.textContent = "🎯 Ma position";
-      locateBtn.disabled = false;
-    }
-    return;
-  }
-
-  navigator.geolocation.getCurrentPosition(
-    function(position) {
-      currentPosition = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude
-      };
-
-      mainMap.setView([currentPosition.lat, currentPosition.lng], 15);
-
-      if (userMarker) mainMap.removeLayer(userMarker);
-
-      userMarker = L.marker([currentPosition.lat, currentPosition.lng])
-        .addTo(mainMap)
-        .bindPopup("Vous êtes ici")
-        .openPopup();
-
-      selectedPosition = currentPosition;
-
-      if (locateBtn) {
-        locateBtn.textContent = "🎯 Ma position";
-        locateBtn.disabled = false;
-      }
-    },
-    function(error) {
-      console.error("Erreur de géolocalisation:", error);
-      alert("Impossible de vous géolocaliser. Utilisation de Paris comme position par défaut.");
-
-      if (locateBtn) {
-        locateBtn.textContent = "🎯 Ma position";
-        locateBtn.disabled = false;
-      }
-    }
-  );
-}
-
-// Explorer Paris (vue d'ensemble)
-function exploreParis() {
-  mainMap.setView([48.8566, 2.3522], 12);
-}
-
-// ---------- Liste ----------
-function loadAllSongs() {
-  const songsList = $('songs-list-container');
-  const noSongsMessage = $('no-songs-message');
-  if (!songsList) return;
-
-  songsList.innerHTML = '';
-
-  if (!sampleSongs || sampleSongs.length === 0) {
-    if (noSongsMessage) noSongsMessage.style.display = 'block';
-    return;
-  }
-
-  if (noSongsMessage) noSongsMessage.style.display = 'none';
-
-  sampleSongs.forEach(song => {
-    const songCard = document.createElement('div');
-    songCard.className = 'song-card';
-
-    songCard.innerHTML = `
-      <div class="song-header">
-        <h3 class="song-title">${escapeHTML(song.title)}</h3>
-      </div>
-      <div class="song-artist">${escapeHTML(song.artist)} ${song.year ? `(${escapeHTML(song.year)})` : ""}</div>
-      <div class="song-location">📍 ${escapeHTML(song.location)}</div>
-      ${song.lyrics ? `<div class="song-lyrics">"${escapeHTML(song.lyrics)}"</div>` : ""}
-      <button class="btn-map-preview" type="button">📍 Voir sur la carte</button>
-      ${song.link ? `<a class="btn-map-preview" style="display:inline-block; margin-top:10px; text-decoration:none;" href="${song.link}" target="_blank" rel="noopener">🎧 Ouvrir le lien</a>` : ""}
-    `;
-
-    songCard.querySelector(".btn-map-preview").addEventListener("click", () => {
-      showSongOnMap(song.lat, song.lng);
-    });
-
-    songsList.appendChild(songCard);
-  });
-}
-
-// Filtrer les chansons selon la recherche
-function filterSongs() {
-  const input = $('search-songs');
-  const searchTerm = (input ? input.value : "").toLowerCase();
-
-  const songs = document.querySelectorAll('.song-card');
-  let visibleCount = 0;
+function drawMarkers(songs){
+  clearMarkers();
 
   songs.forEach(song => {
-    const title = song.querySelector('.song-title')?.textContent.toLowerCase() || "";
-    const artist = song.querySelector('.song-artist')?.textContent.toLowerCase() || "";
-    const location = song.querySelector('.song-location')?.textContent.toLowerCase() || "";
+    const lat = parseNum(song.latitude);
+    const lng = parseNum(song.longitude);
+    if (lat === null || lng === null) return;
 
-    if (title.includes(searchTerm) || artist.includes(searchTerm) || location.includes(searchTerm)) {
-      song.style.display = 'block';
-      visibleCount++;
-    } else {
-      song.style.display = 'none';
-    }
-  });
+  
 
-  const noSongsMessage = $('no-songs-message');
-  if (noSongsMessage) noSongsMessage.style.display = visibleCount === 0 ? 'block' : 'none';
-}
 
-// ---------- Position sélectionnée ----------
-function useMapLocation() {
-  if (selectedPosition) {
-    updateMapLocation(selectedPosition.lat, selectedPosition.lng);
-  } else {
-    alert("Veuillez d'abord cliquer sur la carte pour sélectionner un emplacement.");
-  }
-}
+    const icon = L.divIcon({
+        className: "",                // important pour ne pas ajouter de style Leaflet
+        html: `<div class="song-dot"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+    });
 
-function updateMapLocation(lat, lng) {
-  if (window.tempMarker) mainMap.removeLayer(window.tempMarker);
+    const marker = L.marker([lat, lng], { icon }).addTo(markersLayer);
 
-  window.tempMarker = L.marker([lat, lng])
-    .addTo(mainMap)
-    .bindPopup("Emplacement sélectionné pour la nouvelle chanson")
-    .openPopup();
+    const titre = safe(song.titre) || "Sans titre";
+    const artiste = safe(song.artiste) || "Artiste inconnu";
+    const lieu = safe(song.lieu_principal) || "Lieu";
+    const yt = getYoutubeWatchUrl(song);
 
-  selectedPosition = { lat, lng };
-}
+    const popupHtml = `
+      <div style="min-width:220px;">
+        <div style="font-weight:900; margin-bottom:4px;">${titre}</div>
+        <div style="opacity:.85; margin-bottom:6px;">${artiste}</div>
+        <div style="opacity:.75;">📍 ${lieu}</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          ${yt ? `<button data-yt="1" style="cursor:pointer; padding:6px 10px; border-radius:12px; border:1px solid rgba(0,0,0,.12); background: rgba(255,102,196,.18); font-weight:800;">YouTube</button>` : ""}
+          <button data-open="1" style="cursor:pointer; padding:6px 10px; border-radius:12px; border:1px solid rgba(0,0,0,.12); background: rgba(159,229,255,.18); font-weight:800;">Voir fiche</button>
+        </div>
+      </div>
+    `;
 
-// Générer une position aléatoire dans Paris
-function randomizeLocation() {
-  const parisBounds = {
-    north: 48.9022,
-    south: 48.8156,
-    east: 2.4150,
-    west: 2.2250
-  };
+    marker.bindPopup(popupHtml);
 
-  const lat = parisBounds.south + Math.random() * (parisBounds.north - parisBounds.south);
-  const lng = parisBounds.west + Math.random() * (parisBounds.east - parisBounds.west);
+    marker.on("popupopen", (evt) => {
+      const el = evt.popup.getElement();
+      const bOpen = el?.querySelector('[data-open="1"]');
+      const bYT = el?.querySelector('[data-yt="1"]');
 
-  mainMap.setView([lat, lng], 15);
-  updateMapLocation(lat, lng);
-}
+      if (bOpen) bOpen.addEventListener("click", () => openSongSheet(song));
+      if (bYT) bYT.addEventListener("click", () => {
+        const url = getYoutubeWatchUrl(song);
+        if (url) window.open(url, "_blank", "noopener");
+      });
+    });
 
-// Afficher une chanson sur la carte
-function showSongOnMap(lat, lng) {
-  mainMap.setView([lat, lng], 16);
-}
-
-// ---------- Ajout manuel ----------
-function submitSong(e) {
-  e.preventDefault();
-
-  if (!selectedPosition) {
-    alert("Veuillez sélectionner un emplacement sur la carte.");
-    return;
-  }
-
-  const title = $('new-song-title')?.value || "";
-  const artist = $('new-song-artist')?.value || "";
-
-  if (!title.trim() || !artist.trim()) {
-    alert("Titre et artiste sont obligatoires.");
-    return;
-  }
-
-  // Ces champs peuvent ne pas exister dans ton HTML actuel
-  const commune = $('new-song-commune')?.value || "Lieu non spécifié";
-  const year = $('new-song-year')?.value || "";
-  const address = $('new-song-address')?.value || "";
-  const lyrics = $('new-song-lyrics')?.value || "";
-
-  const newSong = {
-    id: Date.now(),
-    title: title.trim(),
-    artist: artist.trim(),
-    year: year.trim(),
-    location: commune.trim(),
-    lyrics: lyrics.trim() || "Aucun extrait fourni",
-    lat: selectedPosition.lat,
-    lng: selectedPosition.lng,
-    address: address.trim(),
-    link: ""
-  };
-
-  sampleSongs.push(newSong);
-
-  const form = $('song-form');
-  if (form) form.reset();
-
-  addSongMarkers();
-  loadAllSongs();
-
-  alert(`"${newSong.title}" a été ajoutée à la bibliothèque !`);
-  switchToTab('songs-list');
-}
-
-// Actualiser la liste des chansons
-function refreshSongs() {
-  loadAllSongs();
-  addSongMarkers();
-}
-
-// ---------- Tabs ----------
-function setupTabs() {
-  const tabButtons = document.querySelectorAll('.tab-btn');
-  tabButtons.forEach(button => {
-    button.addEventListener('click', function() {
-      const tabId = this.getAttribute('data-tab');
-      switchToTab(tabId);
+    marker.on("click", () => {
+      // juste ouvrir la fiche propre (pas de lecture intégrée)
+      openSongSheet(song);
     });
   });
 }
 
-function switchToTab(tabId) {
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.classList.remove('active');
-    btn.setAttribute('aria-selected', 'false');
-  });
+function zoomToSong(song){
+  const lat = parseNum(song.latitude);
+  const lng = parseNum(song.longitude);
+  if (lat === null || lng === null) return;
 
-  document.querySelectorAll('.tab-pane').forEach(pane => {
-    pane.classList.remove('active');
-  });
+  map.setView([lat, lng], 13);
+}
 
-  const activeBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
-  const activePane = $(tabId);
+// =====================
+// 5) SONG SHEET (bottom)
+// =====================
+function openSongSheet(song){
+  currentSong = song;
 
-  if (activeBtn) {
-    activeBtn.classList.add('active');
-    activeBtn.setAttribute('aria-selected', 'true');
+  const titre = safe(song.titre) || "Sans titre";
+  const artiste = safe(song.artiste) || "Artiste inconnu";
+  const annee = song.annee ? ` • ${song.annee}` : "";
+  const lieu = safe(song.lieu_principal) || "Lieu";
+  const quote = safe(song.extrait_paroles);
+
+  shTitle.textContent = titre;
+  shMeta.textContent = `${artiste}${annee}`;
+  shPlace.textContent = `📍 ${lieu}`;
+
+  if (quote) {
+    shQuote.textContent = `“${quote}”`;
+    shQuote.style.display = "block";
+  } else {
+    shQuote.style.display = "none";
   }
-  if (activePane) activePane.classList.add('active');
+
+  const yt = getYoutubeWatchUrl(song);
+  shYoutube.disabled = !yt;
+
+  const lyrics = safe(song.lien).trim();
+  if (lyrics) {
+    shLyrics.href = lyrics;
+    shLyrics.style.display = "inline-flex";
+  } else {
+    shLyrics.style.display = "none";
+  }
+
+  sheet.classList.remove("hidden");
 }
 
-// ---------- Sécurité (évite injection HTML) ----------
-function escapeHTML(str) {
-  return String(str ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function closeSongSheet(){
+  sheet.classList.add("hidden");
+  currentSong = null;
 }
+
+sheetClose.addEventListener("click", closeSongSheet);
+
+shYoutube.addEventListener("click", () => {
+  const url = currentSong ? getYoutubeWatchUrl(currentSong) : "";
+  if (url) window.open(url, "_blank", "noopener");
+});
+
+shZoom.addEventListener("click", () => {
+  if (!currentSong) return;
+  zoomToSong(currentSong);
+  closeSongSheet();
+});
+
+// =====================
+// 6) RESULTS DRAWER
+// =====================
+function openDrawer(){
+  drawer.classList.remove("hidden");
+}
+
+function closeDrawer(){
+  drawer.classList.add("hidden");
+}
+
+drawerClose.addEventListener("click", closeDrawer);
+
+function renderResults(list){
+  elResults.innerHTML = "";
+  elResultsCount.textContent = String(list.length);
+
+  if (!list.length){
+    elNoResults.classList.remove("hidden");
+    return;
+  }
+  elNoResults.classList.add("hidden");
+
+  list.forEach(song => {
+    const titre = safe(song.titre) || "Sans titre";
+    const artiste = safe(song.artiste) || "Artiste inconnu";
+    const lieu = safe(song.lieu_principal) || "";
+    const tag = getTagStyle(song.style);
+    const dept = safe(song.code_departement).trim();
+    const yt = getYoutubeWatchUrl(song);
+    const lyrics = safe(song.lien).trim();
+
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div class="rc-title">${titre}</div>
+      <div class="rc-meta">${artiste}${song.annee ? ` • ${song.annee}` : ""}${lieu ? ` • ${lieu}` : ""}</div>
+
+      <div class="rc-tags">
+        ${tag ? `<span class="tag">${tag}</span>` : ""}
+        ${dept ? `<span class="tag">${dept}</span>` : ""}
+      </div>
+
+      <div class="rc-actions">
+        ${yt ? `<button class="btn primary" data-yt="1">YouTube</button>` : ""}
+        ${lyrics ? `<a class="btn soft" href="${lyrics}" target="_blank" rel="noopener">Paroles</a>` : ""}
+        <button class="btn soft" data-open="1">Voir</button>
+        <button class="btn soft" data-zoom="1">Carte</button>
+      </div>
+    `;
+
+    card.querySelector('[data-open="1"]').addEventListener("click", () => openSongSheet(song));
+    card.querySelector('[data-zoom="1"]').addEventListener("click", () => zoomToSong(song));
+
+    const ytBtn = card.querySelector('[data-yt="1"]');
+    if (ytBtn) ytBtn.addEventListener("click", () => window.open(yt, "_blank", "noopener"));
+
+    elResults.appendChild(card);
+  });
+}
+
+// =====================
+// 7) SEARCH + FILTERS
+// =====================
+function computeResults(){
+  const q = normalize(elSearch.value);
+
+  // filtres
+  const c = normalize(fCommune.value);
+  const s = normalize(fStyle.value);
+  const d = normalize(fDept.value);
+  const ymin = Number(fYearMin.value || "");
+  const ymax = Number(fYearMax.value || "");
+
+  const hasFilters =
+    !!q || !!c || !!s || !!d || Number.isFinite(ymin) || Number.isFinite(ymax);
+
+  // IMPORTANT: pas de résultats au démarrage
+  if (!hasFilters){
+    isSearchActive = false;
+    currentResults = [];
+    closeDrawer();
+    // Explorer = on peut laisser les marqueurs de toute l'IDF visibles (c’est OK)
+    drawMarkers(allSongs);
+    return;
+  }
+
+  isSearchActive = true;
+
+  let list = allSongs.slice();
+
+  if (q){
+    list = list.filter(song => {
+      const hay = [
+        song.titre, song.artiste, song.style, song.lieu_principal, song.extrait_paroles, song.code_departement
+      ].map(normalize).join(" | ");
+      return hay.includes(q);
+    });
+  }
+
+  if (c){
+    list = list.filter(song => normalize(song.lieu_principal).includes(c));
+  }
+
+  if (s){
+    list = list.filter(song => normalize(song.style).includes(s));
+  }
+
+  if (d){
+    list = list.filter(song => normalize(song.code_departement) === d);
+  }
+
+  if (Number.isFinite(ymin)){
+    list = list.filter(song => Number(song.annee) >= ymin);
+  }
+
+  if (Number.isFinite(ymax)){
+    list = list.filter(song => Number(song.annee) <= ymax);
+  }
+
+  currentResults = list;
+
+  renderResults(currentResults);
+  openDrawer();
+  drawMarkers(currentResults);
+
+  showStatus(`✅ ${currentResults.length} résultat(s)`);
+}
+
+btnClear.addEventListener("click", () => {
+  elSearch.value = "";
+  computeResults();
+});
+
+elSearch.addEventListener("input", () => {
+  // si l’utilisateur tape : on active le mode résultats
+  computeResults();
+});
+
+btnFilters.addEventListener("click", () => {
+  filtersPanel.classList.toggle("hidden");
+});
+
+filtersClose.addEventListener("click", () => {
+  filtersPanel.classList.add("hidden");
+});
+
+filtersApply.addEventListener("click", () => {
+  filtersPanel.classList.add("hidden");
+  computeResults();
+});
+
+filtersReset.addEventListener("click", () => {
+  fCommune.value = "";
+  fStyle.value = "";
+  fDept.value = "";
+  fYearMin.value = "";
+  fYearMax.value = "";
+  filtersPanel.classList.add("hidden");
+  computeResults();
+});
+
+// =====================
+// 8) TOP BUTTONS
+// =====================
+btnRefresh.addEventListener("click", async () => {
+  showStatus("Actualisation...");
+  await loadSongs();
+  computeResults();
+});
+
+btnLocate.addEventListener("click", () => {
+  if (!navigator.geolocation){
+    alert("Géolocalisation non disponible.");
+    return;
+  }
+  btnLocate.disabled = true;
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      btnLocate.disabled = false;
+      map.setView([pos.coords.latitude, pos.coords.longitude], 13);
+    },
+    () => {
+      btnLocate.disabled = false;
+      alert("Impossible d'obtenir ta position.");
+    }
+  );
+});
+
+// =====================
+// 9) TABS
+// =====================
+tabExplore.addEventListener("click", () => {
+  setActiveTab("explore");
+  addPanel.classList.add("hidden");
+  // Explorer = carte + résultats si recherche active
+  if (isSearchActive) openDrawer();
+  else closeDrawer();
+});
+
+tabLibrary.addEventListener("click", () => {
+  setActiveTab("library");
+  addPanel.classList.add("hidden");
+
+  // Bibliothèque = on force l’affichage des résultats = tout
+  currentResults = allSongs.slice();
+  renderResults(currentResults);
+  openDrawer();
+  elResultsCount.textContent = String(allSongs.length);
+  showStatus(`Bibliothèque : ${allSongs.length} chanson(s)`);
+
+  // marqueurs = tout
+  drawMarkers(allSongs);
+});
+
+tabAdd.addEventListener("click", () => {
+  setActiveTab("add");
+  closeDrawer();
+  addPanel.classList.remove("hidden");
+});
+
+// =====================
+// 10) ADD FORM (suggestions)
+// =====================
+addClose.addEventListener("click", () => {
+  addPanel.classList.add("hidden");
+  setActiveTab("explore");
+});
+
+function setAddStatus(msg){
+  addStatus.textContent = msg;
+}
+
+addForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    titre: aTitle.value.trim(),
+    artiste: aArtist.value.trim(),
+    lieu_principal: aCity.value.trim(),
+    style: aStyle.value.trim() || null,
+    annee: aYear.value ? Number(aYear.value) : null,
+    lien_youtube: aYoutube.value.trim() || null,
+    lien: aLyrics.value.trim() || null,
+    extrait_paroles: aQuote.value.trim() || null,
+    latitude: selectedCoords ? selectedCoords.lat : null,
+    longitude: selectedCoords ? selectedCoords.lng : null,
+    status: "pending"
+  };
+
+  if (!payload.titre || !payload.artiste || !payload.lieu_principal){
+    setAddStatus("⚠️ Remplis Titre / Artiste / Commune.");
+    return;
+  }
+
+  setAddStatus("Envoi...");
+  const { error } = await sb.from(TABLE_SUGGEST).insert(payload);
+  if (error){
+    console.error(error);
+    setAddStatus("❌ Erreur : " + error.message);
+    return;
+  }
+
+  setAddStatus("✅ Envoyé ! (En attente de validation)");
+  addForm.reset();
+  selectedCoords = null;
+  addCoords.textContent = "📍 Coordonnées : —";
+});
+
+// =====================
+// 11) LOAD + INIT
+// =====================
+function fillFilterOptions(songs){
+  const communes = new Set();
+  const styles = new Set();
+  const depts = new Set();
+
+  songs.forEach(s => {
+    const c = safe(s.lieu_principal).trim();
+    if (c) communes.add(c);
+
+    const st = safe(s.style).trim();
+    if (st) {
+      // on prend le premier style
+      const first = st.split(",")[0].trim();
+      if (first) styles.add(first);
+    }
+
+    const d = safe(s.code_departement).trim();
+    if (d) depts.add(d);
+  });
+
+  const sortFR = (a,b) => a.localeCompare(b, "fr", { sensitivity: "base" });
+
+  // clear
+  fCommune.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  fStyle.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  fDept.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+
+  [...communes].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fCommune.appendChild(opt);
+  });
+
+  [...styles].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fStyle.appendChild(opt);
+  });
+
+  [...depts].sort(sortFR).forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    fDept.appendChild(opt);
+  });
+}
+
+async function loadSongs(){
+  const { data, error } = await sb
+    .from(TABLE_SONGS)
+    .select(COLS)
+    .order("id_text", { ascending: true })
+    .limit(1000);
+
+  if (error){
+    console.error(error);
+    showStatus("Erreur Supabase: " + error.message);
+    return;
+  }
+
+  allSongs = data || [];
+  elTotalSongs.textContent = String(allSongs.length);
+
+  fillFilterOptions(allSongs);
+
+  // Explorer au démarrage: carte + marqueurs (tout), mais pas de résultats drawer
+  drawMarkers(allSongs);
+  closeDrawer();
+  showStatus(`✅ ${allSongs.length} chanson(s) chargée(s)`);
+}
+
+async function init(){
+  try{
+    if (!window.supabase?.createClient){
+      showStatus("Erreur: supabase-js non chargé.");
+      return;
+    }
+
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    initMap();
+    setActiveTab("explore");
+    await loadSongs();
+
+  }catch(e){
+    console.error(e);
+    showStatus("Erreur: " + (e?.message || e));
+  }
+}
+
+init();
