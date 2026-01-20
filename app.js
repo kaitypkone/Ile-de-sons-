@@ -4,23 +4,33 @@
 const SUPABASE_URL = "https://votckpjacugwoqowjcow.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_kzB2e_oa8VfzGCYlyELKng_YYV8_zJd";
 
-const TABLE_SONGS = "songs";
+const TABLE_SONGS = "chansons";
 const TABLE_SUGGEST = "suggestions"; // pour "Ajouter" (en attente)
 
 const COLS = `
-  id_text,
-  titre,
-  artiste,
+  id,
+  anciens_id,
+  place,
+  full_title,
+  title,
+  genius_song_id,
+  language,
+  main_artist,
+  artist_names,
+  genius_url,
+  lyrics,
   style,
+  media_urls,
   annee,
-  lieu_principal,
-  code_departement,
-  extrait_paroles,
-  lien,
-  lien_youtube,
-  youtube_embed,
   longitude,
-  latitude
+  latitude,
+  echelle,
+  sous_type,
+  youtube_url,
+  spotify_url,
+  soundcloud_url,
+  youtube_embed,
+  decennie
 `;
 
 let sb;
@@ -29,7 +39,6 @@ let sb;
 // 1) DOM
 // =====================
 const elStatus = document.getElementById("status");
-
 const elTotalSongs = document.getElementById("total-songs");
 
 const elSearch = document.getElementById("search-input");
@@ -61,7 +70,11 @@ const fCommune = document.getElementById("f-commune");
 const fStyle = document.getElementById("f-style");
 const fYearMin = document.getElementById("f-year-min");
 const fYearMax = document.getElementById("f-year-max");
+
+// ⚠️ Le filtre département n’existe plus dans la table `chansons`.
+// Si ton HTML a encore un champ f-dept, on le garde mais on le désactive proprement.
 const fDept = document.getElementById("f-dept");
+
 const filtersApply = document.getElementById("filters-apply");
 const filtersReset = document.getElementById("filters-reset");
 
@@ -117,22 +130,60 @@ function parseNum(v){
   return Number.isFinite(n) ? n : null;
 }
 
+function getTitle(song){
+  return safe(song.title).trim() || safe(song.full_title).trim() || "Sans titre";
+}
+
+function getArtist(song){
+  return safe(song.main_artist).trim() || safe(song.artist_names).trim() || "Artiste inconnu";
+}
+
+function getPlace(song){
+  return safe(song.place).trim() || "Lieu";
+}
+
+function getQuote(song){
+  // `lyrics` peut être long. On prend un extrait propre.
+  const txt = safe(song.lyrics).trim();
+  if (!txt) return "";
+  return txt.length > 180 ? txt.slice(0, 180) + "…" : txt;
+}
+
+function getLyricsUrl(song){
+  // lien paroles
+  return safe(song.genius_url).trim();
+}
+
 function getYoutubeWatchUrl(song){
-  const yt = safe(song.lien_youtube).trim();
+  const yt = safe(song.youtube_url).trim();
   if (yt) return yt;
 
   const embed = safe(song.youtube_embed).trim();
   const m = embed.match(/youtube\.com\/embed\/([^?&]+)/);
   if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
+
+  // fallback media_urls si dispo
+  try{
+    const mu = song.media_urls;
+    if (mu && typeof mu === "object"){
+      const y = mu.youtube || mu.yt || mu.youtube_url;
+      if (y) return safe(y).trim();
+    }
+  }catch(_e){}
   return "";
 }
 
 function getTagStyle(style){
   const s = safe(style).trim();
   if (!s) return "";
-  // garde un tag court
   const first = s.split(",")[0].trim();
   return first.length > 18 ? first.slice(0, 18) + "…" : first;
+}
+
+function parseYear(song){
+  // `annee` est en text côté table => on essaie de convertir en nombre
+  const y = parseNum(song.annee);
+  return y;
 }
 
 function setActiveTab(which){
@@ -174,21 +225,18 @@ function drawMarkers(songs){
     const lng = parseNum(song.longitude);
     if (lat === null || lng === null) return;
 
-  
-
-
     const icon = L.divIcon({
-        className: "",                // important pour ne pas ajouter de style Leaflet
-        html: `<div class="song-dot"></div>`,
-        iconSize: [18, 18],
-        iconAnchor: [9, 9]
+      className: "",
+      html: `<div class="song-dot"></div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
     });
 
     const marker = L.marker([lat, lng], { icon }).addTo(markersLayer);
 
-    const titre = safe(song.titre) || "Sans titre";
-    const artiste = safe(song.artiste) || "Artiste inconnu";
-    const lieu = safe(song.lieu_principal) || "Lieu";
+    const titre = getTitle(song);
+    const artiste = getArtist(song);
+    const lieu = getPlace(song);
     const yt = getYoutubeWatchUrl(song);
 
     const popupHtml = `
@@ -207,449 +255,4 @@ function drawMarkers(songs){
 
     marker.on("popupopen", (evt) => {
       const el = evt.popup.getElement();
-      const bOpen = el?.querySelector('[data-open="1"]');
-      const bYT = el?.querySelector('[data-yt="1"]');
-
-      if (bOpen) bOpen.addEventListener("click", () => openSongSheet(song));
-      if (bYT) bYT.addEventListener("click", () => {
-        const url = getYoutubeWatchUrl(song);
-        if (url) window.open(url, "_blank", "noopener");
-      });
-    });
-
-    marker.on("click", () => {
-      // juste ouvrir la fiche propre (pas de lecture intégrée)
-      openSongSheet(song);
-    });
-  });
-}
-
-function zoomToSong(song){
-  const lat = parseNum(song.latitude);
-  const lng = parseNum(song.longitude);
-  if (lat === null || lng === null) return;
-
-  map.setView([lat, lng], 13);
-}
-
-// =====================
-// 5) SONG SHEET (bottom)
-// =====================
-function openSongSheet(song){
-  currentSong = song;
-
-  const titre = safe(song.titre) || "Sans titre";
-  const artiste = safe(song.artiste) || "Artiste inconnu";
-  const annee = song.annee ? ` • ${song.annee}` : "";
-  const lieu = safe(song.lieu_principal) || "Lieu";
-  const quote = safe(song.extrait_paroles);
-
-  shTitle.textContent = titre;
-  shMeta.textContent = `${artiste}${annee}`;
-  shPlace.textContent = `📍 ${lieu}`;
-
-  if (quote) {
-    shQuote.textContent = `“${quote}”`;
-    shQuote.style.display = "block";
-  } else {
-    shQuote.style.display = "none";
-  }
-
-  const yt = getYoutubeWatchUrl(song);
-  shYoutube.disabled = !yt;
-
-  const lyrics = safe(song.lien).trim();
-  if (lyrics) {
-    shLyrics.href = lyrics;
-    shLyrics.style.display = "inline-flex";
-  } else {
-    shLyrics.style.display = "none";
-  }
-
-  sheet.classList.remove("hidden");
-}
-
-function closeSongSheet(){
-  sheet.classList.add("hidden");
-  currentSong = null;
-}
-
-sheetClose.addEventListener("click", closeSongSheet);
-
-shYoutube.addEventListener("click", () => {
-  const url = currentSong ? getYoutubeWatchUrl(currentSong) : "";
-  if (url) window.open(url, "_blank", "noopener");
-});
-
-shZoom.addEventListener("click", () => {
-  if (!currentSong) return;
-  zoomToSong(currentSong);
-  closeSongSheet();
-});
-
-// =====================
-// 6) RESULTS DRAWER
-// =====================
-function openDrawer(){
-  drawer.classList.remove("hidden");
-}
-
-function closeDrawer(){
-  drawer.classList.add("hidden");
-}
-
-drawerClose.addEventListener("click", closeDrawer);
-
-function renderResults(list){
-  elResults.innerHTML = "";
-  elResultsCount.textContent = String(list.length);
-
-  if (!list.length){
-    elNoResults.classList.remove("hidden");
-    return;
-  }
-  elNoResults.classList.add("hidden");
-
-  list.forEach(song => {
-    const titre = safe(song.titre) || "Sans titre";
-    const artiste = safe(song.artiste) || "Artiste inconnu";
-    const lieu = safe(song.lieu_principal) || "";
-    const tag = getTagStyle(song.style);
-    const dept = safe(song.code_departement).trim();
-    const yt = getYoutubeWatchUrl(song);
-    const lyrics = safe(song.lien).trim();
-
-    const card = document.createElement("div");
-    card.className = "result-card";
-    card.innerHTML = `
-      <div class="rc-title">${titre}</div>
-      <div class="rc-meta">${artiste}${song.annee ? ` • ${song.annee}` : ""}${lieu ? ` • ${lieu}` : ""}</div>
-
-      <div class="rc-tags">
-        ${tag ? `<span class="tag">${tag}</span>` : ""}
-        ${dept ? `<span class="tag">${dept}</span>` : ""}
-      </div>
-
-      <div class="rc-actions">
-        ${yt ? `<button class="btn primary" data-yt="1">YouTube</button>` : ""}
-        ${lyrics ? `<a class="btn soft" href="${lyrics}" target="_blank" rel="noopener">Paroles</a>` : ""}
-        <button class="btn soft" data-open="1">Voir</button>
-        <button class="btn soft" data-zoom="1">Carte</button>
-      </div>
-    `;
-
-    card.querySelector('[data-open="1"]').addEventListener("click", () => openSongSheet(song));
-    card.querySelector('[data-zoom="1"]').addEventListener("click", () => zoomToSong(song));
-
-    const ytBtn = card.querySelector('[data-yt="1"]');
-    if (ytBtn) ytBtn.addEventListener("click", () => window.open(yt, "_blank", "noopener"));
-
-    elResults.appendChild(card);
-  });
-}
-
-// =====================
-// 7) SEARCH + FILTERS
-// =====================
-function computeResults(){
-  const q = normalize(elSearch.value);
-
-  // filtres
-  const c = normalize(fCommune.value);
-  const s = normalize(fStyle.value);
-  const d = normalize(fDept.value);
-  const ymin = Number(fYearMin.value || "");
-  const ymax = Number(fYearMax.value || "");
-
-  const hasFilters =
-    !!q || !!c || !!s || !!d || Number.isFinite(ymin) || Number.isFinite(ymax);
-
-  // IMPORTANT: pas de résultats au démarrage
-  if (!hasFilters){
-    isSearchActive = false;
-    currentResults = [];
-    closeDrawer();
-    // Explorer = on peut laisser les marqueurs de toute l'IDF visibles (c’est OK)
-    drawMarkers(allSongs);
-    return;
-  }
-
-  isSearchActive = true;
-
-  let list = allSongs.slice();
-
-  if (q){
-    list = list.filter(song => {
-      const hay = [
-        song.titre, song.artiste, song.style, song.lieu_principal, song.extrait_paroles, song.code_departement
-      ].map(normalize).join(" | ");
-      return hay.includes(q);
-    });
-  }
-
-  if (c){
-    list = list.filter(song => normalize(song.lieu_principal).includes(c));
-  }
-
-  if (s){
-    list = list.filter(song => normalize(song.style).includes(s));
-  }
-
-  if (d){
-    list = list.filter(song => normalize(song.code_departement) === d);
-  }
-
-  if (Number.isFinite(ymin)){
-    list = list.filter(song => Number(song.annee) >= ymin);
-  }
-
-  if (Number.isFinite(ymax)){
-    list = list.filter(song => Number(song.annee) <= ymax);
-  }
-
-  currentResults = list;
-
-  renderResults(currentResults);
-  openDrawer();
-  drawMarkers(currentResults);
-
-  showStatus(`✅ ${currentResults.length} résultat(s)`);
-}
-
-btnClear.addEventListener("click", () => {
-  elSearch.value = "";
-  computeResults();
-});
-
-elSearch.addEventListener("input", () => {
-  // si l’utilisateur tape : on active le mode résultats
-  computeResults();
-});
-
-btnFilters.addEventListener("click", () => {
-  filtersPanel.classList.toggle("hidden");
-});
-
-filtersClose.addEventListener("click", () => {
-  filtersPanel.classList.add("hidden");
-});
-
-filtersApply.addEventListener("click", () => {
-  filtersPanel.classList.add("hidden");
-  computeResults();
-});
-
-filtersReset.addEventListener("click", () => {
-  fCommune.value = "";
-  fStyle.value = "";
-  fDept.value = "";
-  fYearMin.value = "";
-  fYearMax.value = "";
-  filtersPanel.classList.add("hidden");
-  computeResults();
-});
-
-// =====================
-// 8) TOP BUTTONS
-// =====================
-btnRefresh.addEventListener("click", async () => {
-  showStatus("Actualisation...");
-  await loadSongs();
-  computeResults();
-});
-
-btnLocate.addEventListener("click", () => {
-  if (!navigator.geolocation){
-    alert("Géolocalisation non disponible.");
-    return;
-  }
-  btnLocate.disabled = true;
-
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      btnLocate.disabled = false;
-      map.setView([pos.coords.latitude, pos.coords.longitude], 13);
-    },
-    () => {
-      btnLocate.disabled = false;
-      alert("Impossible d'obtenir ta position.");
-    }
-  );
-});
-
-// =====================
-// 9) TABS
-// =====================
-tabExplore.addEventListener("click", () => {
-  setActiveTab("explore");
-  addPanel.classList.add("hidden");
-  // Explorer = carte + résultats si recherche active
-  if (isSearchActive) openDrawer();
-  else closeDrawer();
-});
-
-tabLibrary.addEventListener("click", () => {
-  setActiveTab("library");
-  addPanel.classList.add("hidden");
-
-  // Bibliothèque = on force l’affichage des résultats = tout
-  currentResults = allSongs.slice();
-  renderResults(currentResults);
-  openDrawer();
-  elResultsCount.textContent = String(allSongs.length);
-  showStatus(`Bibliothèque : ${allSongs.length} chanson(s)`);
-
-  // marqueurs = tout
-  drawMarkers(allSongs);
-});
-
-tabAdd.addEventListener("click", () => {
-  setActiveTab("add");
-  closeDrawer();
-  addPanel.classList.remove("hidden");
-});
-
-// =====================
-// 10) ADD FORM (suggestions)
-// =====================
-addClose.addEventListener("click", () => {
-  addPanel.classList.add("hidden");
-  setActiveTab("explore");
-});
-
-function setAddStatus(msg){
-  addStatus.textContent = msg;
-}
-
-addForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const payload = {
-    titre: aTitle.value.trim(),
-    artiste: aArtist.value.trim(),
-    lieu_principal: aCity.value.trim(),
-    style: aStyle.value.trim() || null,
-    annee: aYear.value ? Number(aYear.value) : null,
-    lien_youtube: aYoutube.value.trim() || null,
-    lien: aLyrics.value.trim() || null,
-    extrait_paroles: aQuote.value.trim() || null,
-    latitude: selectedCoords ? selectedCoords.lat : null,
-    longitude: selectedCoords ? selectedCoords.lng : null,
-    status: "pending"
-  };
-
-  if (!payload.titre || !payload.artiste || !payload.lieu_principal){
-    setAddStatus("⚠️ Remplis Titre / Artiste / Commune.");
-    return;
-  }
-
-  setAddStatus("Envoi...");
-  const { error } = await sb.from(TABLE_SUGGEST).insert(payload);
-  if (error){
-    console.error(error);
-    setAddStatus("❌ Erreur : " + error.message);
-    return;
-  }
-
-  setAddStatus("✅ Envoyé ! (En attente de validation)");
-  addForm.reset();
-  selectedCoords = null;
-  addCoords.textContent = "📍 Coordonnées : —";
-});
-
-// =====================
-// 11) LOAD + INIT
-// =====================
-function fillFilterOptions(songs){
-  const communes = new Set();
-  const styles = new Set();
-  const depts = new Set();
-
-  songs.forEach(s => {
-    const c = safe(s.lieu_principal).trim();
-    if (c) communes.add(c);
-
-    const st = safe(s.style).trim();
-    if (st) {
-      // on prend le premier style
-      const first = st.split(",")[0].trim();
-      if (first) styles.add(first);
-    }
-
-    const d = safe(s.code_departement).trim();
-    if (d) depts.add(d);
-  });
-
-  const sortFR = (a,b) => a.localeCompare(b, "fr", { sensitivity: "base" });
-
-  // clear
-  fCommune.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
-  fStyle.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
-  fDept.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
-
-  [...communes].sort(sortFR).forEach(v => {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v;
-    fCommune.appendChild(opt);
-  });
-
-  [...styles].sort(sortFR).forEach(v => {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v;
-    fStyle.appendChild(opt);
-  });
-
-  [...depts].sort(sortFR).forEach(v => {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v;
-    fDept.appendChild(opt);
-  });
-}
-
-async function loadSongs(){
-  const { data, error } = await sb
-    .from(TABLE_SONGS)
-    .select(COLS)
-    .order("id_text", { ascending: true })
-    .limit(1000);
-
-  if (error){
-    console.error(error);
-    showStatus("Erreur Supabase: " + error.message);
-    return;
-  }
-
-  allSongs = data || [];
-  elTotalSongs.textContent = String(allSongs.length);
-
-  fillFilterOptions(allSongs);
-
-  // Explorer au démarrage: carte + marqueurs (tout), mais pas de résultats drawer
-  drawMarkers(allSongs);
-  closeDrawer();
-  showStatus(`✅ ${allSongs.length} chanson(s) chargée(s)`);
-}
-
-async function init(){
-  try{
-    if (!window.supabase?.createClient){
-      showStatus("Erreur: supabase-js non chargé.");
-      return;
-    }
-
-    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    initMap();
-    setActiveTab("explore");
-    await loadSongs();
-
-  }catch(e){
-    console.error(e);
-    showStatus("Erreur: " + (e?.message || e));
-  }
-}
-
-init();
+      const bOpen = el?.query_...
