@@ -3,13 +3,12 @@
 // =====================
 const SUPABASE_URL = "https://votckpjacugwoqowjcow.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_kzB2e_oa8VfzGCYlyELKng_YYV8_zJd";
-
 const TABLE_SONGS = "chansons";
 
 let sb;
 
 // =====================
-// 1) DOM HELPERS
+// 1) DOM
 // =====================
 const $ = (id) => document.getElementById(id);
 
@@ -37,7 +36,7 @@ const safe = (v) => (v ?? "").toString();
 const norm = (s) => safe(s).toLowerCase().trim();
 
 function showStatus(msg){
-  elStatus.textContent = msg;
+  if (elStatus) elStatus.textContent = msg;
   console.log("[status]", msg);
 }
 
@@ -59,10 +58,10 @@ function initMap(){
 // =====================
 // 5) MARKERS
 // =====================
-function drawMarkers(songs){
+function drawMarkers(list){
   markersLayer.clearLayers();
 
-  songs.forEach(song => {
+  list.forEach(song => {
     if (song.latitude == null || song.longitude == null) return;
 
     L.marker([song.latitude, song.longitude], {
@@ -94,7 +93,9 @@ function renderResults(list){
     div.className = "result-card";
     div.innerHTML = `
       <div class="rc-title">${safe(song.title || song.full_title)}</div>
-      <div class="rc-meta">${safe(song.main_artist || song.artist_names)} • ${safe(song.place)}</div>
+      <div class="rc-meta">
+        ${safe(song.main_artist || song.artist_names)} • ${safe(song.place)}
+      </div>
     `;
     elResults.appendChild(div);
   });
@@ -121,7 +122,8 @@ function computeResults(){
       song.artist_names,
       song.place,
       song.style,
-      song.language
+      song.language,
+      song.lyrics
     ].map(norm).join(" ").includes(q)
   );
 
@@ -138,7 +140,7 @@ btnClear.addEventListener("click", () => {
 });
 
 // =====================
-// 8) LOAD SONGS (PAGINATION)
+// 8) LOAD SONGS (ROBUSTE)
 // =====================
 async function loadSongs(){
   showStatus("Chargement des chansons…");
@@ -156,11 +158,16 @@ async function loadSongs(){
         full_title,
         main_artist,
         artist_names,
-        style,
-        language,
         place,
         latitude,
-        longitude
+        longitude,
+        lyrics,
+        style,
+        language,
+        annee,
+        youtube_url,
+        youtube_embed,
+        decennie
       `)
       .order("id", { ascending: true })
       .range(from, from + step - 1);
@@ -171,7 +178,10 @@ async function loadSongs(){
       return;
     }
 
-    if (!data || data.length === 0) break;
+    if (!data || data.length < step){
+      all = all.concat(data || []);
+      break;
+    }
 
     all = all.concat(data);
     from += step;
