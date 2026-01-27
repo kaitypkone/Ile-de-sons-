@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root{
+  --bg: #fffbe0;      /* jaune clair mais assumé */
+  --cardTint: #f6f2fb;
+  --border: #eadff3;
+
+  --ink: #231a2a;
+  --muted: #5d5165;
+
+  --primary: #c050b0;
+  --primarySoft: #f3def2;
+  --primarySoft2: #ecd1ea;
+
+  --warm: #fffdd4;    /* jaune du logo */
+}
+
+html, body {
+  height: 100%;
+}
+
+body{
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+}
