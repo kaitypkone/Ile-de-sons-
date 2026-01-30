@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { Map as MLMap, LngLatBoundsLike } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import SongSearch, { SongSearchResult } from "./SongSearch";
+import PlaceSearch, { PlaceSearchResult } from "../../components/PlaceSearch";
 
 type SongPoint = {
   id: string;
@@ -25,6 +26,7 @@ type SongPoint = {
   lyrics: string | null;
   annee: string | null;
   decennie: string | null;
+  distance_km?: number | null;
 };
 
 type GeoJSONFeature = GeoJSON.Feature<GeoJSON.Geometry, any>;
@@ -43,14 +45,36 @@ const Z_POINTS_START = 12.8;   // points individuels
 export default function MusicMap() {
   const mapRef = useRef<MLMap | null>(null);
   const mapDivRef = useRef<HTMLDivElement | null>(null);
-
+  const lyricsRef = useRef<HTMLDivElement | null>(null);
   const [selectedSong, setSelectedSong] = useState<SongPoint | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetSnap, setSheetSnap] = useState<"collapsed" | "half" | "full">("full");
+  const dragRef = useRef<{ startY: number; startSnap: "collapsed" | "half" | "full" } | null>(null);
 
   const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   const [lastBboxKey, setLastBboxKey] = useState<string>("");
 
-  const [tab, setTab] = useState<"lecture" | "paroles">("lecture");
+  const [placeTotal, setPlaceTotal] = useState<number>(0);
+const [placeOffset, setPlaceOffset] = useState<number>(0);
+const [placeHasMore, setPlaceHasMore] = useState<boolean>(false);
+const [placeLoadingMore, setPlaceLoadingMore] = useState<boolean>(false);
+
+const PLACE_PAGE_SIZE = 50;
+
+const [filters, setFilters] = useState({
+  artists: [] as string[],
+  echelles: [] as string[],
+  decennies: [] as string[],
+  styles: [] as string[],
+  languages: [] as string[],
+});
+
+const [placeMode, setPlaceMode] = useState<"song" | "place">("song");
+const [placeSongs, setPlaceSongs] = useState<SongPoint[]>([]);
+const [selectedPlaceLabel, setSelectedPlaceLabel] = useState<string>("");
+
+
+const [tab, setTab] = useState<"lecture" | "paroles" | "liste">("lecture");
 const [selectedPlace, setSelectedPlace] = useState<string>("");
 
   const idfBounds: LngLatBoundsLike = useMemo(
@@ -112,6 +136,7 @@ map.on("error", (e) => {
       wireSongPointInteractions(map, (song) => {
         setSelectedSong(song);
         setSheetOpen(true);
+        setSheetSnap("full");
       });
     });
 
@@ -130,110 +155,397 @@ map.on("error", (e) => {
       {/* Overlay haut */}
       <div className="absolute left-0 right-0 top-0 z-20 px-3 pt-3">
         <div className="mx-auto w-full max-w-[420px] space-y-2">
-          <SongSearch
-            onSelect={(song) => {
-              const map = mapRef.current;
-              if (!map) return;
+          {/* Toggle Chanson / Lieu */}
+          <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
+            <div className="flex">
+              <button
+                className={[
+                  "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+                  placeMode === "song"
+                    ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+                    : "text-[color:var(--muted)]",
+                ].join(" ")}
+                onClick={() => setPlaceMode("song")}
+              >
+                Chanson
+              </button>
 
-              setSelectedSong(song as any);
-              setSelectedPlace(song.place ?? "");
-              setTab("lecture");
-              setSheetOpen(true);
-
-              if (
-                typeof song.longitude === "number" &&
-                typeof song.latitude === "number"
-              ) {
-                const targetZoom = Math.max(map.getZoom(), 13);
-                map.easeTo({
-                  center: [song.longitude, song.latitude],
-                  zoom: targetZoom,
-                  duration: 650,
-                });
-                setSelectedPoint(map, song.longitude, song.latitude, song);
-              }
-            }}
-          />
-
-          <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-3 py-2 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-                Carte musicale
-              </div>
-              <div className="text-[12px] text-[color:var(--muted)]">
-                {isLoadingPoints ? "Chargement…" : " "}
-              </div>
+              <button
+                className={[
+                  "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+                  placeMode === "place"
+                    ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+                    : "text-[color:var(--muted)]",
+                ].join(" ")}
+                onClick={() => setPlaceMode("place")}
+              >
+                Lieu
+              </button>
             </div>
           </div>
+
+          {/* ✅ Filtres (doit être DANS l’overlay) */}
+          <FiltersPanel filters={filters} setFilters={setFilters} />
+
+          {/* ✅ Recherche */}
+          {placeMode === "song" ? (
+            <SongSearch
+              loading={isLoadingPoints}
+              filters={filters}
+              onSelect={(song) => {
+                const map = mapRef.current;
+                if (!map) return;
+
+                setSelectedSong(song as any);
+                setSelectedPlace(song.place ?? "");
+                setTab("lecture");
+                setSheetOpen(true);
+                setSheetSnap("full");
+
+                if (
+                  typeof song.longitude === "number" &&
+                  typeof song.latitude === "number"
+                ) {
+                  const targetZoom = Math.max(map.getZoom(), 13);
+                  map.easeTo({
+                    center: [song.longitude, song.latitude],
+                    zoom: targetZoom,
+                    duration: 650,
+                  });
+                  setSelectedPoint(map, song.longitude, song.latitude, song);
+                }
+              }}
+            />
+          ) : (
+            <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-visible">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border)]">
+                <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+                  Recherche de lieu
+                </div>
+
+                <button
+                  className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--ink)]"
+                  onClick={async () => {
+                    if (!navigator.geolocation) {
+                      alert("La géolocalisation n'est pas disponible.");
+                      return;
+                    }
+
+                    navigator.geolocation.getCurrentPosition(
+                      async (pos) => {
+                        const lat = pos.coords.latitude;
+                        const lng = pos.coords.longitude;
+
+                        const res = await fetch("/api/songs-nearby", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            lat,
+                            lng,
+                            radiusKm: 20,
+                            limit: 100,
+                            filters,
+                          }),
+                        });
+
+                        if (!res.ok) return;
+                        const json = await res.json();
+
+                        setSelectedPlaceLabel("Autour de moi (20 km)");
+                        setPlaceSongs(json.songs ?? []);
+                        setPlaceTotal((json.songs ?? []).length);
+                        setPlaceOffset((json.songs ?? []).length);
+                        setPlaceHasMore(false);
+                        setSelectedSong(null);
+
+                        setTab("liste");
+                        setSheetOpen(true);
+                        setSheetSnap("full");
+
+                        const map = mapRef.current;
+                        if (map) {
+                          map.easeTo({
+                            center: [lng, lat],
+                            zoom: Math.max(map.getZoom(), 12),
+                            duration: 650,
+                          });
+                        }
+                      },
+                      (err) => {
+                        alert("Impossible d’obtenir la position.");
+                        console.error(err);
+                      },
+                      { enableHighAccuracy: true, timeout: 8000 }
+                    );
+                  }}
+                >
+                  Autour de moi
+                </button>
+              </div>
+
+              <div className="p-2">
+                <PlaceSearch
+                  filters={filters}
+                  onSelect={async (p) => {
+                    const map = mapRef.current;
+                    if (!map) return;
+
+                    setSelectedPlaceLabel(p.place);
+
+                    const res = await fetch("/api/songs-by-place", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        place: p.place,
+                        filters,
+                        offset: 0,
+                        limit: PLACE_PAGE_SIZE,
+                      }),
+                    });
+
+                    if (!res.ok) return;
+                    const json = await res.json();
+
+                    setPlaceSongs(json.songs ?? []);
+                    setSelectedSong(null);
+                    setPlaceTotal(json.total ?? 0);
+                    setPlaceOffset((json.songs ?? []).length);
+                    setPlaceHasMore(Boolean(json.hasMore));
+                    setPlaceLoadingMore(false);
+
+                    setTab("liste");
+                    setSheetOpen(true);
+                    setSheetSnap("full");
+
+                    if (json.center && Array.isArray(json.center)) {
+                      map.easeTo({
+                        center: json.center,
+                        zoom: Math.max(map.getZoom(), 12),
+                        duration: 650,
+                      });
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Bottom sheet */}
       <BottomSheet
         open={sheetOpen}
+        snap={sheetSnap}
+        onSnap={setSheetSnap}
         onClose={() => setSheetOpen(false)}
-        title={selectedSong?.full_title ?? selectedSong?.title ?? "Sélection"}
+        title={
+          selectedSong?.full_title ??
+          selectedSong?.title ??
+          selectedPlaceLabel ??
+          "Sélection"
+        }
         subtitle={
           selectedSong?.place
-            ? `${selectedSong.place}${selectedSong.echelle ? ` · ${selectedSong.echelle}` : ""}`
+            ? `${selectedSong.place}${
+                selectedSong.echelle ? ` · ${selectedSong.echelle}` : ""
+              }`
+            : selectedPlaceLabel
+            ? "Résultats pour ce lieu"
             : undefined
         }
       >
-        <div className="p-3">
-          <div className="rounded-xl border border-[color:var(--border)] bg-white overflow-hidden">
-            <div className="flex">
-              <button
-                className={[
-                  "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
-                  tab === "lecture"
-                    ? "text-[color:var(--ink)] border-[color:var(--primary)]"
-                    : "text-[color:var(--muted)] border-[color:var(--border)]",
-                ].join(" ")}
-                onClick={() => setTab("lecture")}
-              >
-                Lecture
-              </button>
-              <button
-                className={[
-                  "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
-                  tab === "paroles"
-                    ? "text-[color:var(--ink)] border-[color:var(--primary)]"
-                    : "text-[color:var(--muted)] border-[color:var(--border)]",
-                ].join(" ")}
-                onClick={() => setTab("paroles")}
-              >
-                Paroles
-              </button>
-            </div>
+         <div className="p-3">
+    <div className="rounded-xl border border-[color:var(--border)] bg-white overflow-hidden">
+      <div className="flex">
+        <button
+          className={[
+            "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
+            tab === "lecture"
+              ? "text-[color:var(--ink)] border-[color:var(--primary)]"
+              : "text-[color:var(--muted)] border-[color:var(--border)]",
+          ].join(" ")}
+          onClick={() => setTab("lecture")}
+        >
+          Lecture
+        </button>
 
-            <div
-  className={tab === "lecture" ? "block" : "invisible h-0 overflow-hidden"}
->
-  {selectedSong && (
-    <MediaBlock
-      song={{
-        youtube_embed: selectedSong.youtube_embed,
-        youtube_url: selectedSong.youtube_url,
-        spotify_url: selectedSong.spotify_url,
-        soundcloud_url: selectedSong.soundcloud_url,
-      }}
-    />
-  )}
-</div>
+        <button
+          className={[
+            "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
+            tab === "paroles"
+              ? "text-[color:var(--ink)] border-[color:var(--primary)]"
+              : "text-[color:var(--muted)] border-[color:var(--border)]",
+          ].join(" ")}
+          onClick={() => setTab("paroles")}
+        >
+          Paroles
+        </button>
 
-            <div className={tab === "paroles" ? "block" : "hidden"}>
-              <div className="p-3 whitespace-pre-wrap text-[13px] leading-6 text-[color:var(--ink)]">
-                {selectedSong?.lyrics ?? "Paroles indisponibles."}
-              </div>
-            </div>
+        {placeSongs.length > 0 ? (
+          <button
+            className={[
+              "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
+              tab === "liste"
+                ? "text-[color:var(--ink)] border-[color:var(--primary)]"
+                : "text-[color:var(--muted)] border-[color:var(--border)]",
+            ].join(" ")}
+            onClick={() => setTab("liste")}
+          >
+            Liste
+          </button>
+        ) : null}
+      </div>
+
+      {/* LECTURE */}
+      <div className={tab === "lecture" ? "block" : "invisible h-0 overflow-hidden"}>
+        {selectedSong ? (
+          <MediaBlock
+            song={{
+              youtube_embed: selectedSong.youtube_embed,
+              youtube_url: selectedSong.youtube_url,
+              spotify_url: selectedSong.spotify_url,
+              soundcloud_url: selectedSong.soundcloud_url,
+            }}
+          />
+        ) : (
+          <div className="p-3 text-[13px] text-[color:var(--muted)]">
+            Sélectionne une chanson pour afficher le lecteur.
           </div>
+        )}
+      </div>
+
+      {/* PAROLES */}
+      <div className={tab === "paroles" ? "block" : "hidden"}>
+        {selectedSong?.place ? (
+          <div className="px-3 pt-3">
+            <button
+              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--primary)]"
+              onClick={() => {
+                const el = document.getElementById("highlighted-place");
+                el?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+            >
+              Voir le passage
+            </button>
+          </div>
+        ) : null}
+
+        <div className="p-3 whitespace-pre-wrap text-[13px] leading-6 text-[color:var(--ink)]">
+          {selectedSong && selectedSong.lyrics && selectedSong.place
+            ? renderLyricsWithHighlight(selectedSong.lyrics, selectedSong.place)
+            : selectedSong?.lyrics}
         </div>
+      </div>
+
+      {/* LISTE */}
+      <div className={tab === "liste" ? "block" : "hidden"}>
+        <div className="p-3">
+          <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+            {selectedPlaceLabel || "Lieu"}
+          </div>
+
+          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+            {placeSongs.length.toLocaleString("fr-FR")} / {placeTotal.toLocaleString("fr-FR")} chansons
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {placeSongs.map((s) => (
+              <button
+                key={s.id}
+                className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3"
+                onClick={() => {
+                  const map = mapRef.current;
+                  if (!map) return;
+
+                  setSelectedSong(s);
+                  setTab("lecture");
+                  setSheetOpen(true);
+                  setSheetSnap("full");
+
+                  if (typeof s.longitude === "number" && typeof s.latitude === "number") {
+                    map.easeTo({
+                      center: [s.longitude, s.latitude],
+                      zoom: Math.max(map.getZoom(), 13),
+                      duration: 650,
+                    });
+                    setSelectedPoint(map, s.longitude, s.latitude, s);
+                  }
+                }}
+              >
+                <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+                  {s.full_title ?? s.title ?? "Sans titre"}
+                </div>
+
+                <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+                  {(s.main_artist ?? s.artist_names ?? "—")}
+                  {typeof (s as any).distance_km === "number"
+                    ? ` · ${(s as any).distance_km.toFixed(1).replace(".", ",")} km`
+                    : ""}
+                </div>
+
+                {s.lyrics ? (
+                  <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">
+                    {renderLyricsExcerptWithHighlight(
+                      s.lyrics,
+                      selectedPlaceLabel && !selectedPlaceLabel.startsWith("Autour de moi")
+                        ? selectedPlaceLabel
+                        : (s.place ?? ""),
+                      90
+                    )}
+                  </div>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          {placeHasMore ? (
+            <button
+              className="mt-3 w-full rounded-2xl border border-[color:var(--border)] bg-white px-3 py-3 text-[13px] font-semibold text-[color:var(--ink)]"
+              onClick={loadMorePlaceSongs}
+              disabled={placeLoadingMore}
+            >
+              {placeLoadingMore ? "Chargement…" : "Charger plus"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  </div>
+
       </BottomSheet>
     </div>
   </main>
 );
 
 
+async function loadMorePlaceSongs() {
+  if (placeLoadingMore || !placeHasMore) return;
+  setPlaceLoadingMore(true);
+
+  try {
+    const res = await fetch("/api/songs-by-place", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        place: selectedPlaceLabel,
+        filters,
+        offset: placeOffset,
+        limit: PLACE_PAGE_SIZE,
+      }),
+    });
+
+    if (!res.ok) return;
+    const json = await res.json();
+
+    const newSongs = json.songs ?? [];
+    setPlaceSongs((prev) => [...prev, ...newSongs]);
+    setPlaceTotal(json.total ?? placeTotal);
+    setPlaceOffset((prev) => prev + newSongs.length);
+    setPlaceHasMore(Boolean(json.hasMore));
+  } finally {
+    setPlaceLoadingMore(false);
+  }
+}
 
   async function maybeFetchPoints(map: MLMap) {
     const z = map.getZoom();
@@ -258,6 +570,11 @@ map.on("error", (e) => {
       url.searchParams.set("maxLng", String(b.getEast()));
       url.searchParams.set("maxLat", String(b.getNorth()));
       url.searchParams.set("zoom", String(z));
+      for (const a of filters.artists) url.searchParams.append("artist", a);
+for (const d of filters.decennies) url.searchParams.append("decennie", d);
+for (const s of filters.styles) url.searchParams.append("style", s);
+for (const e of filters.echelles) url.searchParams.append("echelle", e);
+for (const l of filters.languages) url.searchParams.append("language", l);
 
       const res = await fetch(url.toString());
 
@@ -535,6 +852,8 @@ function wireSongPointInteractions(
     const f = e.features?.[0];
     if (!f) return;
 
+    const coords = (f.geometry as any).coordinates as [number, number];
+
     const props = f.properties ?? {};
     const song: SongPoint = {
       id: props.id,
@@ -558,6 +877,7 @@ function wireSongPointInteractions(
       decennie: props.decennie,
     };
     onSelect(song);
+    setSelectedPoint(map, coords[0], coords[1], song);
   });
 
   map.on("mouseenter", "clusters", () => map.getCanvas().style.cursor = "pointer");
@@ -566,41 +886,580 @@ function wireSongPointInteractions(
   map.on("mouseleave", "unclustered", () => map.getCanvas().style.cursor = "");
 }
 
+function normalizeForMatch(s: string) {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    // apostrophes/tirets → espace (gère ’ et ')
+    .replace(/[’']/g, " ")
+    .replace(/[-‐-‒–—―]/g, " ")
+    // ponctuation → espace
+    .replace(/[.,;:!?(){}\[\]"«»]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Construit: (1) texte normalisé (sans accents etc.)
+//           (2) mapNormToOrig : pour chaque char du texte normalisé, l'index dans lyrics original
+function buildNormalizedMap(original: string) {
+  let norm = "";
+  const mapNormToOrig: number[] = [];
+
+  let lastWasSpace = false;
+
+  for (let i = 0; i < original.length; i++) {
+    const ch = original[i];
+
+    // Normalise ce caractère seul
+    const normCh = ch
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+    // Si c'est un séparateur (espace, apostrophe, tiret, ponctuation) => un seul espace
+    if (
+      /\s/.test(ch) ||
+      /[’']/.test(ch) ||
+      /[-‐-‒–—―]/.test(ch) ||
+      /[.,;:!?(){}\[\]"«»]/.test(ch)
+    ) {
+      if (!lastWasSpace && norm.length > 0) {
+        norm += " ";
+        mapNormToOrig.push(i); // espace “représente” ce point dans l’original
+        lastWasSpace = true;
+      }
+      continue;
+    }
+
+    // sinon, on ajoute tous les chars normalisés produits
+    for (let k = 0; k < normCh.length; k++) {
+      const out = normCh[k];
+      if (!out) continue;
+      norm += out;
+      mapNormToOrig.push(i);
+      lastWasSpace = false;
+    }
+  }
+
+  // Trim de fin: on enlève espaces finaux et map associée
+  while (norm.endsWith(" ")) {
+    norm = norm.slice(0, -1);
+    mapNormToOrig.pop();
+  }
+
+  return { norm, mapNormToOrig };
+}
+
+function findFirstMatchRange(original: string, place: string) {
+  if (!original || !place) return null;
+
+  const { norm, mapNormToOrig } = buildNormalizedMap(original);
+  const needle = normalizeForMatch(place);
+  if (!needle) return null;
+
+  const idx = norm.indexOf(needle);
+  if (idx === -1) return null;
+
+  // index original de début/fin via la map
+  const startOrig = mapNormToOrig[idx];
+  const endOrig = mapNormToOrig[idx + needle.length - 1] + 1; // end exclusive
+
+  if (startOrig == null || endOrig == null) return null;
+  return { startOrig, endOrig };
+}
+
+function renderLyricsWithHighlight(lyrics: string, place: string) {
+  const range = findFirstMatchRange(lyrics, place);
+  if (!range) return lyrics;
+
+  const { startOrig, endOrig } = range;
+
+  return (
+    <>
+      {lyrics.slice(0, startOrig)}
+      <strong
+        id="highlighted-place"
+        className="font-semibold text-[color:var(--primary)]"
+      >
+        {lyrics.slice(startOrig, endOrig)}
+      </strong>
+      {lyrics.slice(endOrig)}
+    </>
+  );
+}
+
+function renderLyricsExcerptWithHighlight(
+  lyrics: string,
+  place: string,
+  radius = 90
+) {
+  const range = findFirstMatchRange(lyrics, place);
+  if (!range) {
+    return (
+      <span className="text-[color:var(--muted)]">
+        Extrait indisponible.
+      </span>
+    );
+  }
+
+  const { startOrig, endOrig } = range;
+
+  // Fenêtre autour du match
+  const start = Math.max(0, startOrig - radius);
+  const end = Math.min(lyrics.length, endOrig + radius);
+
+  let before = lyrics.slice(start, startOrig);
+  const match = lyrics.slice(startOrig, endOrig);
+  let after = lyrics.slice(endOrig, end);
+
+  // Ajoute "…" si on coupe
+  if (start > 0) before = `…${before}`;
+  if (end < lyrics.length) after = `${after}…`;
+
+  return (
+    <>
+      {before}
+      <strong className="font-semibold text-[color:var(--primary)]">
+        {match}
+      </strong>
+      {after}
+    </>
+  );
+}
+
+function FiltersPanel({
+  filters,
+  setFilters,
+}: {
+  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[] };
+setFilters: React.Dispatch<
+  React.SetStateAction<{ artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[] }>
+>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [artistInput, setArtistInput] = useState("");
+  const [styleInput, setStyleInput] = useState("");
+  const [languageInput, setLanguageInput] = useState("");
+
+
+  const [artistOpen, setArtistOpen] = useState(false);
+const [styleOpen, setStyleOpen] = useState(false);
+
+const [artistOptions, setArtistOptions] = useState<{ label: string; count: number }[]>([]);
+const [styleOptions, setStyleOptions] = useState<{ label: string; count: number }[]>([]);
+
+async function fetchSuggest(kind: "artist" | "style", q: string) {
+  const url = new URL("/api/filter-suggest", window.location.origin);
+  url.searchParams.set("kind", kind);
+  url.searchParams.set("q", q);
+  url.searchParams.set("limit", "12");
+  const res = await fetch(url.toString());
+  if (!res.ok) return [];
+  const json = await res.json();
+  return (json.options ?? []) as { label: string; count: number }[];
+}
+
+
+  const decades = [
+    "1950-1960",
+    "1960-1970",
+    "1970-1980",
+    "1980-1990",
+    "1990-2000",
+    "2000-2010",
+    "2010-2020",
+    "2020-2030",
+  ];
+
+  function addChip(kind: "artists" | "styles" | "languages", value: string) {
+  const v = value.trim();
+  if (!v) return;
+
+  setFilters((prev) => {
+    const arr = prev[kind];
+    if (arr.includes(v)) return prev;
+    return { ...prev, [kind]: [...arr, v] };
+  });
+
+  if (kind === "artists") setArtistInput("");
+  if (kind === "styles") setStyleInput("");
+  if (kind === "languages") setLanguageInput("");
+}
+
+  function removeChip(
+  kind: "artists" | "styles" | "decennies" | "languages",
+  value: string
+) {
+  setFilters((prev) => ({
+    ...prev,
+    [kind]: prev[kind].filter((x) => x !== value),
+  }));
+}
+
+  function toggleDecade(d: string) {
+    setFilters((prev) => ({
+      ...prev,
+      decennies: prev.decennies.includes(d)
+        ? prev.decennies.filter((x) => x !== d)
+        : [...prev.decennies, d],
+    }));
+  }
+
+  function clearAll() {
+    setFilters({ artists: [], echelles: [], decennies: [], styles: [], languages: []});
+  }
+
+  const count =
+  filters.artists.length +
+  filters.decennies.length +
+  filters.styles.length +
+  filters.echelles.length +
+  filters.languages.length;
+
+  return (
+    <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-hidden">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div className="text-[13px] font-semibold text-[color:var(--ink)]">Filtres</div>
+        <div className="text-[12px] text-[color:var(--muted)]">{count} sélection</div>
+      </button>
+
+      {open ? (
+        <div className="border-t border-[color:var(--border)] p-3 space-y-3">
+          {count ? (
+            <div className="flex flex-wrap gap-2">
+              {filters.artists.map((a) => (
+                <Chip key={`a-${a}`} label={a} onRemove={() => removeChip("artists", a)} />
+              ))}
+              {filters.styles.map((s) => (
+                <Chip key={`s-${s}`} label={s} onRemove={() => removeChip("styles", s)} />
+              ))}
+              {filters.decennies.map((d) => (
+                <Chip key={`d-${d}`} label={d} onRemove={() => removeChip("decennies", d)} />
+              ))}
+              {filters.languages.map((l) => (
+  <Chip key={`l-${l}`} label={l} onRemove={() => removeChip("languages" as any, l)} />
+))}
+              <button
+                className="text-[12px] font-semibold text-[color:var(--primary)] underline"
+                onClick={clearAll}
+              >
+                Tout effacer
+              </button>
+            </div>
+          ) : null}
+
+          {/* Artistes (autocomplete) */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Artistes</div>
+
+  <div className="relative">
+    <div className="flex gap-2">
+      <input
+        value={artistInput}
+        onChange={async (e) => {
+          const v = e.target.value;
+          setArtistInput(v);
+          const opts = await fetchSuggest("artist", v);
+          setArtistOptions(opts);
+          setArtistOpen(true);
+        }}
+        onFocus={async () => {
+          const opts = await fetchSuggest("artist", artistInput);
+          setArtistOptions(opts);
+          setArtistOpen(true);
+        }}
+        onBlur={() => {
+          // petit délai pour laisser le click sur une option
+          window.setTimeout(() => setArtistOpen(false), 120);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            addChip("artists", artistInput);
+            setArtistOpen(false);
+          }
+        }}
+        placeholder="Rechercher un artiste…"
+        className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <button
+        className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
+        onClick={() => {
+          addChip("artists", artistInput);
+          setArtistOpen(false);
+        }}
+      >
+        Ajouter
+      </button>
+    </div>
+
+    {artistOpen && artistOptions.length ? (
+      <div className="absolute left-0 right-0 mt-2 max-h-56 overflow-auto rounded-2xl border border-[color:var(--border)] bg-white shadow-lg z-50">
+        {artistOptions.map((o) => (
+          <button
+            key={o.label}
+            className="w-full text-left px-3 py-2 hover:bg-[color:var(--cardTint)]"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              addChip("artists", o.label);
+              setArtistOpen(false);
+            }}
+          >
+            <div className="text-[13px] font-semibold text-[color:var(--ink)]">{o.label}</div>
+            <div className="text-[11px] text-[color:var(--muted)]">{o.count} occurrence(s)</div>
+          </button>
+        ))}
+      </div>
+    ) : null}
+  </div>
+</div>
+
+          {/* Styles (autocomplete) */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Styles</div>
+
+  <div className="relative">
+    <div className="flex gap-2">
+      <input
+        value={styleInput}
+        onChange={async (e) => {
+          const v = e.target.value;
+          setStyleInput(v);
+          const opts = await fetchSuggest("style", v);
+          setStyleOptions(opts);
+          setStyleOpen(true);
+        }}
+        onFocus={async () => {
+          const opts = await fetchSuggest("style", styleInput);
+          setStyleOptions(opts);
+          setStyleOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setStyleOpen(false), 120)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            addChip("styles", styleInput);
+            setStyleOpen(false);
+          }
+        }}
+        placeholder="Ex: rap, pop…"
+        className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <button
+        className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
+        onClick={() => {
+          addChip("styles", styleInput);
+          setStyleOpen(false);
+        }}
+      >
+        Ajouter
+      </button>
+    </div>
+
+    {styleOpen && styleOptions.length ? (
+      <div className="absolute left-0 right-0 mt-2 max-h-56 overflow-auto rounded-2xl border border-[color:var(--border)] bg-white shadow-lg z-50">
+        {styleOptions.map((o) => (
+          <button
+            key={o.label}
+            className="w-full text-left px-3 py-2 hover:bg-[color:var(--cardTint)]"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              addChip("styles", o.label);
+              setStyleOpen(false);
+            }}
+          >
+            <div className="text-[13px] font-semibold text-[color:var(--ink)]">{o.label}</div>
+            <div className="text-[11px] text-[color:var(--muted)]">{o.count} occurrence(s)</div>
+          </button>
+        ))}
+      </div>
+    ) : null}
+
+    <div className="mt-2 text-[12px] text-[color:var(--muted)]">
+      Astuce : si tu sélectionnes “rap”, une chanson avec “r&amp;b, pop, rap” sera gardée.
+    </div>
+  </div>
+</div>
+
+{/* Langues */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Langues</div>
+  <div className="flex gap-2">
+    <input
+      value={languageInput}
+      onChange={(e) => setLanguageInput(e.target.value)}
+      placeholder="Ex: français, anglais…"
+      className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+    />
+    <button
+      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
+      onClick={() => addChip("languages", languageInput)}
+    >
+      Ajouter
+    </button>
+  </div>
+</div>
+
+          {/* Décennies */}
+         {/* Décennies (menu déroulant) */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Décennie</div>
+
+  <div className="flex gap-2">
+    <select
+      className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      defaultValue=""
+      onChange={(e) => {
+        const v = e.target.value;
+        if (!v) return;
+        setFilters((prev) => ({
+          ...prev,
+          decennies: prev.decennies.includes(v) ? prev.decennies : [...prev.decennies, v],
+        }));
+        e.currentTarget.value = "";
+      }}
+    >
+      <option value="">Choisir une décennie…</option>
+      {decades.map((d) => (
+        <option key={d} value={d}>
+          {d}
+        </option>
+      ))}
+    </select>
+
+    <button
+      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
+      onClick={() => setOpen(true)}
+    >
+      OK
+    </button>
+  </div>
+</div>
+
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-1 text-[12px] font-semibold text-[color:var(--ink)]">
+      {label}
+      <button onClick={onRemove} className="text-[color:var(--muted)]">
+        ×
+      </button>
+    </span>
+  );
+}
+
+
 function BottomSheet({
   open,
+  snap,
+  onSnap,
   onClose,
   title,
   subtitle,
   children,
 }: {
   open: boolean;
+  snap: "collapsed" | "half" | "full";
+  onSnap: (s: "collapsed" | "half" | "full") => void;
   onClose: () => void;
   title: string;
   subtitle?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
+  // Positions en % : plus c’est grand, plus la sheet est “bas” (moins visible)
+  const snapClass =
+    snap === "collapsed"
+      ? "translate-y-[92%]"
+      : snap === "half"
+      ? "translate-y-[40%]"
+      : "translate-y-0";
+
   return (
     <div
       className={[
         "absolute left-0 right-0 bottom-0 z-30 transition-transform duration-200",
-        open ? "translate-y-0 pointer-events-auto" : "translate-y-[92%] pointer-events-none",
+        open ? `${snapClass} pointer-events-auto` : "translate-y-[100%] pointer-events-none",
       ].join(" ")}
+      // Empêche le scroll de la page derrière
+      style={{ touchAction: "none" }}
     >
-      <div className="mx-auto w-full max-w-[420px] rounded-t-3xl bg-white shadow-lg">
-        <div className="px-4 py-3 border-b border-[color:var(--border)]">
-          <div className="text-[14px] font-semibold">{title}</div>
-          {subtitle ? (
-            <div className="text-[12px] text-[color:var(--muted)]">{subtitle}</div>
-          ) : null}
+      <div className="mx-auto w-full max-w-[420px] rounded-t-3xl bg-white shadow-lg overflow-hidden">
+        {/* Handle tactile */}
+        <div
+          className="px-4 pt-2 pb-2 border-b border-[color:var(--border)]"
+          onPointerDown={(e) => {
+            // capture du pointer pour suivre le drag
+            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+            (window as any).__sheetDrag = {
+              startY: e.clientY,
+              startSnap: snap,
+            };
+          }}
+          onPointerMove={(e) => {
+            const d = (window as any).__sheetDrag as
+              | { startY: number; startSnap: "collapsed" | "half" | "full" }
+              | undefined;
+            if (!d) return;
+
+            const dy = e.clientY - d.startY;
+
+            // Si on tire vers le haut (dy négatif) : on “ouvre”
+            if (dy < -50) {
+              if (d.startSnap === "collapsed") onSnap("half");
+              else onSnap("full");
+              (window as any).__sheetDrag = undefined;
+            }
+
+            // Si on tire vers le bas (dy positif) : on “ferme”
+            if (dy > 50) {
+              if (d.startSnap === "full") onSnap("half");
+              else onSnap("collapsed");
+              (window as any).__sheetDrag = undefined;
+            }
+          }}
+          onPointerUp={() => {
+            (window as any).__sheetDrag = undefined;
+          }}
+        >
+          <div className="mx-auto h-1.5 w-10 rounded-full bg-[color:var(--border)]" />
+          <div className="mt-2 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold truncate">{title}</div>
+              {subtitle ? (
+                <div className="text-[12px] text-[color:var(--muted)] truncate">
+                  {subtitle}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Bouton fermer total (optionnel). Tu peux le retirer si tu veux. */}
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-2 py-1 text-[12px] font-semibold text-[color:var(--ink)]"
+            >
+              Fermer
+            </button>
+          </div>
         </div>
 
-        <div className="max-h-[70dvh] overflow-auto pb-[env(safe-area-inset-bottom)]">
-  {children}
-</div>
+        {/* Contenu scrollable */}
+        <div className="max-h-[75dvh] overflow-auto pb-[env(safe-area-inset-bottom)]">
+          {children}
+        </div>
       </div>
     </div>
   );
-
 }
 
 function toSpotifyEmbed(url: string) {
@@ -704,7 +1563,7 @@ function MediaBlock({
 
       {yt ? (
         <div className="text-[12px] text-[color:var(--muted)]">
-          Si la vidéo est indisponible dans l’application, utilise Spotify/SoundCloud ci-dessus.
+          Si la vidéo est indisponible dans l’application, utilise un lien externe Youtube/Spotify/SoundCloud ci-dessus.
         </div>
       ) : null}
     </div>

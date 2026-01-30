@@ -57,9 +57,14 @@ function renderBoldMarkdownish(text: string) {
 
 export default function SongSearch({
   onSelect,
+  loading: loadingMap,
+  filters,
 }: {
   onSelect: (song: SongSearchResult) => void;
+  loading?: boolean;
+  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[] };
 }) {
+
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SongSearchResult[]>([]);
   const [open, setOpen] = useState(false);
@@ -91,9 +96,16 @@ export default function SongSearch({
 
       setLoading(true);
       try {
-  const res = await fetch(`/api/song-search?q=${encodeURIComponent(q.trim())}`, {
-    signal: ac.signal,
-  });
+ const url = new URL("/api/song-search", window.location.origin);
+url.searchParams.set("q", q.trim());
+
+for (const a of filters.artists) url.searchParams.append("artist", a);
+for (const d of filters.decennies) url.searchParams.append("decennie", d);
+for (const s of filters.styles) url.searchParams.append("style", s);
+for (const e of filters.echelles) url.searchParams.append("echelle", e);
+
+const res = await fetch(url.toString(), { signal: ac.signal });
+
   if (!res.ok) return;
   const json = await res.json();
   const r = (json?.results ?? []) as SongSearchResult[];
@@ -113,6 +125,9 @@ export default function SongSearch({
     return () => window.clearTimeout(t);
   }, [q, canSearch]);
 
+  const shown = results.slice(0, 5);
+
+
   function pick(song: SongSearchResult) {
     setOpen(false);
     onSelect(song);
@@ -129,9 +144,9 @@ export default function SongSearch({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onFocus={() => results.length && setOpen(true)}
+            onFocus={() => shown.length && setOpen(true)}
             onKeyDown={(e) => {
-              if (!open && e.key === "ArrowDown" && results.length) {
+              if (!open && e.key === "ArrowDown" && shown.length) {
                 setOpen(true);
                 return;
               }
@@ -140,7 +155,7 @@ export default function SongSearch({
               if (e.key === "Escape") setOpen(false);
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setActive((v) => Math.min(results.length - 1, v + 1));
+                setActive((v) => Math.min(shown.length - 1, v + 1));
               }
               if (e.key === "ArrowUp") {
                 e.preventDefault();
@@ -148,7 +163,7 @@ export default function SongSearch({
               }
               if (e.key === "Enter") {
                 e.preventDefault();
-                const s = results[active];
+                const s = shown[active];
                 if (s) pick(s);
               }
             }}
@@ -161,43 +176,45 @@ export default function SongSearch({
           />
 
           <div className="text-[12px] text-[color:var(--muted)]">
-            {loading ? "…" : " "}
+            {loading ? "…" : loadingMap ? "Chargement…" : " "}
           </div>
         </div>
       </div>
 
-      {open && results.length ? (
-        <div
-          className="
-            absolute left-0 right-0 mt-2 z-50
-            rounded-2xl border border-[color:var(--border)]
-            bg-white shadow-lg overflow-hidden
-          "
+      {open && shown.length ? (
+  <div
+    className="
+      absolute left-0 right-0 mt-2 z-50
+      rounded-2xl border border-[color:var(--border)]
+      bg-white shadow-lg overflow-hidden
+    "
+  >
+    <div className="max-h-[240px] overflow-auto">
+      {shown.map((r, i) => (
+        <button
+          key={r.id}
+          className={[
+            "w-full text-left px-3 py-3 border-b border-[color:var(--border)] last:border-b-0",
+            i === active ? "bg-[color:var(--cardTint)]" : "bg-white",
+          ].join(" ")}
+          onMouseEnter={() => setActive(i)}
+          onClick={() => pick(r)}
         >
-          {results.map((r, i) => (
-            <button
-              key={r.id}
-              className={[
-                "w-full text-left px-3 py-3 border-b border-[color:var(--border)] last:border-b-0",
-                i === active ? "bg-[color:var(--cardTint)]" : "bg-white",
-              ].join(" ")}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => pick(r)}
-            >
-              <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-                {r.full_title ?? r.title ?? "Sans titre"}
-              </div>
-              <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-                {r.place ? `${r.place}${r.echelle ? ` · ${r.echelle}` : ""}` : "—"}
-              </div>
+          <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+            {r.full_title ?? r.title ?? "Sans titre"}
+          </div>
+          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+            {r.place ? `${r.place}${r.echelle ? ` · ${r.echelle}` : ""}` : "—"}
+          </div>
 
-              <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)] line-clamp-3">
-                {renderBoldMarkdownish(r.snippet)}
-              </div>
-            </button>
-          ))}
-        </div>
-      ) : null}
+          <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)] line-clamp-3">
+            {renderBoldMarkdownish(r.snippet)}
+          </div>
+        </button>
+      ))}
+    </div>
+  </div>
+) : null}
     </div>
   );
 }

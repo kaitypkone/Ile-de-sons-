@@ -40,6 +40,12 @@ function boldAllCaseInsensitive(text: string, what: string) {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const qRaw = (searchParams.get("q") ?? "").trim();
+  const artists = searchParams.getAll("artist").filter(Boolean);
+const decennies = searchParams.getAll("decennie").filter(Boolean);
+const styles = searchParams.getAll("style").filter(Boolean);
+const echelles = searchParams.getAll("echelle").filter(Boolean);
+const languages = searchParams.getAll("language").filter(Boolean);
+
 
   if (qRaw.length < 2) {
     return NextResponse.json({ results: [] });
@@ -51,28 +57,57 @@ export async function GET(req: Request) {
 
   // On cherche sur plusieurs champs en OR.
   // Tolérant à la casse via ilike. V1 = pas de “typos”, mais déjà très utile.
-  const like = `%${qRaw}%`;
 
-  const loose = `%${qRaw.replace(/[\s\-’'"]+/g, "%")}%`;
+ // On cherche sur plusieurs champs en OR.
+const like = `%${qRaw}%`;
+const loose = `%${qRaw.replace(/[\s\-’'"]+/g, "%")}%`;
 
-  const { data, error } = await supabase
-    .from("chansons")
-    .select(
-      "id, genius_song_id, full_title, title, main_artist, artist_names, place, anciens_id, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie"
-    )
-    .or(
-  [
-    `title.ilike.${like}`,
-    `full_title.ilike.${like}`,
-    `artist_names.ilike.${like}`,
-    `main_artist.ilike.${like}`,
-    `lyrics.ilike.${like}`,
-    // version "loose" (espaces/tirets tolérés)
-    `title.ilike.${loose}`,
-    `full_title.ilike.${loose}`,
-  ].join(",")
-)
-    .limit(12);
+// Groupe de recherche (OR)
+const searchGroup = `or(title.ilike.${like},full_title.ilike.${like},artist_names.ilike.${like},main_artist.ilike.${like},lyrics.ilike.${like},title.ilike.${loose},full_title.ilike.${loose})`;
+
+const andParts: string[] = [searchGroup];
+
+// Filtre artistes (OR entre main_artist et artist_names, et OR entre les artistes sélectionnés)
+if (artists.length) {
+  const ors = artists.flatMap((a) => [
+    `main_artist.ilike.%${a}%`,
+    `artist_names.ilike.%${a}%`,
+  ]);
+  andParts.push(`or(${ors.join(",")})`);
+}
+
+// Filtre styles : OR (au moins un style sélectionné doit apparaître dans la colonne "style")
+if (styles.length) {
+  const ors = styles.map((s) => `style.ilike.%${s}%`);
+  andParts.push(`or(${ors.join(",")})`);
+}
+
+// Filtre échelles : echelle + echelle2 (Paris en Département via echelle2)
+if (echelles.length) {
+  const ors: string[] = [];
+  if (echelles.includes("Rue")) ors.push("echelle.eq.Rue");
+  if (echelles.includes("Commune")) ors.push("echelle.eq.Commune");
+  if (echelles.includes("Région")) ors.push("echelle.eq.Région");
+  if (echelles.includes("Département")) ors.push("echelle2.eq.Département");
+  if (ors.length) andParts.push(`or(${ors.join(",")})`);
+}
+
+// Requête : AND(...) autour de plusieurs blocs OR(...)
+let query = supabase
+  .from("chansons")
+  .select(
+    "id, genius_song_id, full_title, title, main_artist, artist_names, place, anciens_id, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie"
+  )
+  .or(`and(${andParts.join(",")})`)
+  .limit(12);
+
+// Décennies : filtre direct (AND)
+query = query.in("language", languages)
+
+if (decennies.length) query = query.in("decennie", decennies);
+
+const { data, error } = await query;
+
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
