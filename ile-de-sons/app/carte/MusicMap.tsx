@@ -67,6 +67,8 @@ const [filters, setFilters] = useState({
   decennies: [] as string[],
   styles: [] as string[],
   languages: [] as string[],
+  echelle2s: [] as string[],   // ✅ AJOUT
+  sous_types: [] as string[],  // ✅ AJOUT
 });
 
 const [placeMode, setPlaceMode] = useState<"song" | "place">("song");
@@ -575,7 +577,8 @@ for (const d of filters.decennies) url.searchParams.append("decennie", d);
 for (const s of filters.styles) url.searchParams.append("style", s);
 for (const e of filters.echelles) url.searchParams.append("echelle", e);
 for (const l of filters.languages) url.searchParams.append("language", l);
-
+for (const e2 of filters.echelle2s) url.searchParams.append("echelle2", e2);
+for (const st of filters.sous_types) url.searchParams.append("sous_type", st);
       const res = await fetch(url.toString());
 
 if (!res.ok) {
@@ -1032,28 +1035,32 @@ function FiltersPanel({
   filters,
   setFilters,
 }: {
-  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[] };
+  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[]; echelle2s: string[]; sous_types: string[]};
 setFilters: React.Dispatch<
-  React.SetStateAction<{ artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[] }>
+  React.SetStateAction<{ artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[]; echelle2s: string[]; sous_types: string[]}>
 >;
 }) {
   const [open, setOpen] = useState(false);
   const [artistInput, setArtistInput] = useState("");
   const [styleInput, setStyleInput] = useState("");
   const [languageInput, setLanguageInput] = useState("");
-
+  const [languageOptions, setLanguageOptions] = useState<{ label: string; count: number }[]>([]);
 
   const [artistOpen, setArtistOpen] = useState(false);
 const [styleOpen, setStyleOpen] = useState(false);
 
 const [artistOptions, setArtistOptions] = useState<{ label: string; count: number }[]>([]);
 const [styleOptions, setStyleOptions] = useState<{ label: string; count: number }[]>([]);
+const [echelle2Options, setEchelle2Options] = useState<{ label: string; count: number }[]>([]);
+const [sousTypeOptions, setSousTypeOptions] = useState<{ label: string; count: number }[]>([]);
 
-async function fetchSuggest(kind: "artist" | "style", q: string) {
+type SuggestKind = "artist" | "style" | "language" | "echelle2" | "sous_type";
+
+async function fetchSuggest(kind: SuggestKind, q: string) {
   const url = new URL("/api/filter-suggest", window.location.origin);
   url.searchParams.set("kind", kind);
   url.searchParams.set("q", q);
-  url.searchParams.set("limit", "12");
+  url.searchParams.set("limit", "40");
   const res = await fetch(url.toString());
   if (!res.ok) return [];
   const json = await res.json();
@@ -1072,7 +1079,7 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
     "2020-2030",
   ];
 
-  function addChip(kind: "artists" | "styles" | "languages", value: string) {
+  function addChip(kind: "artists" | "styles" | "languages" | "echelle2s" | "sous_types", value: string) {
   const v = value.trim();
   if (!v) return;
 
@@ -1088,7 +1095,7 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
 }
 
   function removeChip(
-  kind: "artists" | "styles" | "decennies" | "languages",
+  kind: "artists" | "styles" | "decennies" | "languages" | "echelle2s" | "sous_types",
   value: string
 ) {
   setFilters((prev) => ({
@@ -1107,7 +1114,7 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
   }
 
   function clearAll() {
-    setFilters({ artists: [], echelles: [], decennies: [], styles: [], languages: []});
+    setFilters({ artists: [], echelles: [], decennies: [], styles: [], languages: [], echelle2s: [], sous_types: [] });
   }
 
   const count =
@@ -1115,7 +1122,9 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
   filters.decennies.length +
   filters.styles.length +
   filters.echelles.length +
-  filters.languages.length;
+  filters.languages.length +
+  filters.echelle2s.length +
+  filters.sous_types.length;
 
   return (
     <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-hidden">
@@ -1141,7 +1150,13 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
                 <Chip key={`d-${d}`} label={d} onRemove={() => removeChip("decennies", d)} />
               ))}
               {filters.languages.map((l) => (
-  <Chip key={`l-${l}`} label={l} onRemove={() => removeChip("languages" as any, l)} />
+  <Chip key={`l-${l}`} label={l} onRemove={() => removeChip("languages", l)} />
+))}
+{filters.echelle2s.map((v) => (
+  <Chip key={`e2-${v}`} label={v} onRemove={() => removeChip("echelle2s", v)} />
+))}
+{filters.sous_types.map((v) => (
+  <Chip key={`st-${v}`} label={v} onRemove={() => removeChip("sous_types", v)} />
 ))}
               <button
                 className="text-[12px] font-semibold text-[color:var(--primary)] underline"
@@ -1287,23 +1302,93 @@ async function fetchSuggest(kind: "artist" | "style", q: string) {
   </div>
 </div>
 
-{/* Langues */}
+{/* Langues (menu déroulant Supabase) */}
 <div>
-  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Langues</div>
-  <div className="flex gap-2">
-    <input
-      value={languageInput}
-      onChange={(e) => setLanguageInput(e.target.value)}
-      placeholder="Ex: français, anglais…"
-      className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
-    />
-    <button
-      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
-      onClick={() => addChip("languages", languageInput)}
-    >
-      Ajouter
-    </button>
-  </div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Langue</div>
+
+  <select
+    className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+    defaultValue=""
+    onFocus={async () => {
+      // charge la liste au moment où tu ouvres
+      const opts = await fetchSuggest("language", "");
+      setLanguageOptions(opts);
+    }}
+    onChange={(e) => {
+      const v = e.target.value;
+      if (!v) return;
+
+      setFilters((prev) => ({
+        ...prev,
+        languages: prev.languages.includes(v) ? prev.languages : [...prev.languages, v],
+      }));
+
+      e.currentTarget.value = "";
+    }}
+  >
+    <option value="">Choisir une langue…</option>
+    {languageOptions.map((o) => (
+      <option key={o.label} value={o.label}>
+        {o.label} ({o.count})
+      </option>
+    ))}
+  </select>
+</div>
+
+{/* Échelle 2 (menu déroulant) */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Échelle 2</div>
+
+  <select
+    className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+    defaultValue=""
+    onFocus={async () => {
+      if (echelle2Options.length) return;
+      const opts = await fetchSuggest("echelle2", "");
+      setEchelle2Options(opts);
+    }}
+    onChange={(e) => {
+      const v = e.target.value;
+      if (!v) return;
+      addChip("echelle2s", v);
+      e.currentTarget.value = "";
+    }}
+  >
+    <option value="">Choisir une échelle 2…</option>
+    {echelle2Options.map((o) => (
+      <option key={o.label} value={o.label}>
+        {o.label} ({o.count})
+      </option>
+    ))}
+  </select>
+</div>
+
+{/* Sous-type (menu déroulant) */}
+<div>
+  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Sous-type</div>
+
+  <select
+    className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+    defaultValue=""
+    onFocus={async () => {
+      if (sousTypeOptions.length) return;
+      const opts = await fetchSuggest("sous_type", "");
+      setSousTypeOptions(opts);
+    }}
+    onChange={(e) => {
+      const v = e.target.value;
+      if (!v) return;
+      addChip("sous_types", v);
+      e.currentTarget.value = "";
+    }}
+  >
+    <option value="">Choisir un sous-type…</option>
+    {sousTypeOptions.map((o) => (
+      <option key={o.label} value={o.label}>
+        {o.label} ({o.count})
+      </option>
+    ))}
+  </select>
 </div>
 
           {/* Décennies */}
