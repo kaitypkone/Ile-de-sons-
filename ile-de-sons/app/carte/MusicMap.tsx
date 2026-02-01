@@ -8,6 +8,7 @@ import PlaceSearch, { PlaceSearchResult } from "../../components/PlaceSearch";
 
 type SongPoint = {
   id: string;
+  anciens_id: string | null;
   genius_song_id: string | null;
   full_title: string | null;
   title: string | null;
@@ -26,11 +27,29 @@ type SongPoint = {
   lyrics: string | null;
   annee: string | null;
   decennie: string | null;
+    style: string | null;          
   distance_km?: number | null;
+  language: string | null;
 };
 
 type GeoJSONFeature = GeoJSON.Feature<GeoJSON.Geometry, any>;
 type GeoJSONFC = GeoJSON.FeatureCollection<GeoJSON.Geometry, any>;
+
+type Overlay = "none" | "idf" | "dep" | "river" | "rail";
+
+type ContributionDraft = {
+  title: string;
+  main_artist: string;
+  lyrics: string;
+  place: string;
+  echelle: "" | "Région" | "Département" | "Commune" | "Rue";
+  sous_type: string;
+  decennie: string;
+  youtube_url: string;
+  latitude: number | null;
+  longitude: number | null;
+};
+
 
 const POSITRON_STYLE =
   "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -44,6 +63,16 @@ const Z_POINTS_START = 12.8;   // points individuels
 
 export default function MusicMap() {
   const mapRef = useRef<MLMap | null>(null);
+  // Garde en mémoire les points actuellement chargés (pour retrouver les doublons sur un clic)
+const pointsGeojsonRef = useRef<GeoJSONFC | null>(null);
+
+ // ✅ index coords arrondies -> chansons à ce point
+  const coordIndexRef = useRef<Map<string, SongPoint[]>>(new Map());
+
+  function coordKey(lng: number, lat: number) {
+    return `${lng.toFixed(6)}|${lat.toFixed(6)}`;
+  }
+
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const lyricsRef = useRef<HTMLDivElement | null>(null);
   const [selectedSong, setSelectedSong] = useState<SongPoint | null>(null);
@@ -53,6 +82,10 @@ export default function MusicMap() {
 
   const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   const [lastBboxKey, setLastBboxKey] = useState<string>("");
+const [pickOnMap, setPickOnMap] = useState(false);
+const pickMarkerRef = useRef<maplibregl.Marker | null>(null);
+const [pickToast, setPickToast] = useState<string | null>(null);
+
 
   const [placeTotal, setPlaceTotal] = useState<number>(0);
 const [placeOffset, setPlaceOffset] = useState<number>(0);
@@ -63,16 +96,131 @@ const PLACE_PAGE_SIZE = 50;
 
 const [filters, setFilters] = useState({
   artists: [] as string[],
-  echelles: [] as string[],
   decennies: [] as string[],
   styles: [] as string[],
   languages: [] as string[],
-  echelle2s: [] as string[],   // ✅ AJOUT
-  sous_types: [] as string[],  // ✅ AJOUT
 });
 
+const [contributionOpen, setContributionOpen] = useState(false);
+
+const [draft, setDraft] = useState<ContributionDraft>({
+  title: "",
+  main_artist: "",
+  lyrics: "",
+  place: "",
+  echelle: "",
+  sous_type: "",
+  decennie: "",
+  youtube_url: "",
+  latitude: null,
+  longitude: null,
+});
+
+async function submitContribution() {
+  const res = await fetch("/api/chansons-contributions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    alert(j.error ?? "Erreur lors de l’envoi.");
+    return;
+  }
+
+  alert("Merci. Ta contribution a été envoyée.");
+  setContributionOpen(false);
+  setDraft({
+    title: "",
+    main_artist: "",
+    lyrics: "",
+    place: "",
+    echelle: "",
+    sous_type: "",
+    decennie: "",
+    youtube_url: "",
+    latitude: null,
+    longitude: null,
+  });
+}
+
+useEffect(() => {
+  const map = mapRef.current;
+  if (!map) return;
+
+  if (!pickOnMap) {
+    map.getCanvas().style.cursor = "";
+    return;
+  }
+
+  map.getCanvas().style.cursor = "crosshair";
+
+  const handler = (e: maplibregl.MapMouseEvent) => {
+    const lng = e.lngLat.lng;
+    const lat = e.lngLat.lat;
+
+    console.log("[pickOnMap] picked:", lng, lat);
+
+    // 1) Sauvegarde dans le draft
+    setDraft((d) => ({ ...d, longitude: lng, latitude: lat }));
+
+    // 2) Feedback VISUEL garanti : Marker
+    if (pickMarkerRef.current) pickMarkerRef.current.remove();
+    pickMarkerRef.current = new maplibregl.Marker({ color: "#c050b0" })
+      .setLngLat([lng, lat])
+      .addTo(map);
+
+    // 3) Petit toast
+    setPickToast(`✅ Point sélectionné : ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    window.setTimeout(() => setPickToast(null), 1800);
+
+    // 4) Fin du mode pick
+    setPickOnMap(false);
+  };
+
+  map.once("click", handler);
+
+  return () => {
+    map.off("click", handler);
+    map.getCanvas().style.cursor = "";
+  };
+}, [pickOnMap]);
+
+
+  // Garder les filtres "à jour" pour les callbacks MapLibre (évite le bug: filtres qui sautent après moveend)
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
+  // Signature stable des filtres (pour déclencher un refetch même si la carte ne bouge pas)
+  const filtersKey = useMemo(() => {
+    const norm = (arr: string[]) =>
+      [...arr]
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+
+    return JSON.stringify({
+      artists: norm(filters.artists),
+      decennies: norm(filters.decennies),
+      styles: norm(filters.styles),
+      languages: norm(filters.languages),
+    });
+  }, [filters]);
+
+const [topMode, setTopMode] = useState<"filter" | "search" | "contribute" | null>(null);
 const [placeMode, setPlaceMode] = useState<"song" | "place">("song");
+
+function toggleTopMode(next: "filter" | "search" | "contribute") {
+  setTopMode((cur) => (cur === next ? null : next));
+}
+
+
 const [placeSongs, setPlaceSongs] = useState<SongPoint[]>([]);
+// Chansons correspondant exactement au point cliqué (mêmes coordonnées)
+const [pointSongs, setPointSongs] = useState<SongPoint[]>([]);
 const [selectedPlaceLabel, setSelectedPlaceLabel] = useState<string>("");
 
 
@@ -99,8 +247,8 @@ if (mapRef.current) {
     const map = new maplibregl.Map({
   container: mapDivRef.current,
   style: POSITRON_STYLE,
-  center: [2.35, 48.6],  // moitié nord (ajuste si tu veux)
-  zoom: 6.2,             // moitié nord visible au chargement
+  center: [2.35, 48.85],  // moitié nord (ajuste si tu veux)
+  zoom: 8.3,             // moitié nord visible au chargement
   minZoom: 2.5,          // dézoom très large autorisé
   maxZoom: 18,
   attributionControl: false,
@@ -117,36 +265,171 @@ map.on("error", (e) => {
     mapRef.current = map;
 
     map.on("load", async () => {
-      // 1) Contexte (polygones/lignes) depuis fichiers GeoJSON
-      await addContextLayers(map);
+  // 1) Contexte...
+  await addContextLayers(map);
+  setOverlay(map, "none");
 
-      // 2) Source pour points chansons (GeoJSON qu’on alimentera via API bbox)
-      addSongPointLayers(map);
+// ✅ Clics sur les GeoJSON (idf / deps / fleuves / rail)
+const openGeo = async (kind: "idf" | "dep" | "river" | "rail", id: any, label: string) => {
+  // reset liste
+  setSelectedSong(null);
+  setPointSongs([]);
+  setSelectedPlaceLabel(label);
 
-       addSelectionLayers(map);
+  // fetch
+  const res = await fetch("/api/songs-by-geo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind,
+      id,
+      filters: filtersRef.current,
+      offset: 0,
+      limit: PLACE_PAGE_SIZE,
+    }),
+  });
 
-      // 3) Gestion visibilité selon zoom
-      applyVisibilityRules(map);
-      map.on("zoom", () => applyVisibilityRules(map));
-      map.on("moveend", () => maybeFetchPoints(map));
-      map.on("zoomend", () => maybeFetchPoints(map));
+  if (!res.ok) return;
+  const json = await res.json();
 
-      // 4) Premier fetch si zoom ok
-      maybeFetchPoints(map);
+  setPlaceSongs(json.songs ?? []);
+  setPlaceTotal(json.total ?? 0);
+  setPlaceOffset((json.songs ?? []).length);
+  setPlaceHasMore(Boolean(json.hasMore));
+  setPlaceLoadingMore(false);
 
-      // 5) Interactions clic clusters / points
-      wireSongPointInteractions(map, (song) => {
-        setSelectedSong(song);
-        setSheetOpen(true);
-        setSheetSnap("full");
-      });
-    });
+  setTab("liste");
+  setSheetOpen(true);
+  setSheetSnap("full");
+};
+
+// IDF (polygone)
+map.on("click", "idf-fill", (e) => {
+  const feats = map.queryRenderedFeatures(e.point, { layers: ["idf-fill"] }) as any[];
+  const f = feats?.[0];
+  if (!f) return;
+
+  const id = f.properties?.ID; // ✅ IDF.geojson -> "ID"
+  if (id == null) return;
+
+  openGeo("idf", id, "Île-de-France");
+});
+
+// Départements (polygones)
+map.on("click", "deps-fill", (e) => {
+  const feats = map.queryRenderedFeatures(e.point, { layers: ["deps-fill"] }) as any[];
+  const f = feats?.[0];
+  if (!f) return;
+
+  const id = f.properties?.ID; // ✅ dep_WGS84.geojson -> "ID"
+  if (id == null) return;
+
+  const label =
+    f.properties?.NOM ??
+    f.properties?.Nom ??
+    f.properties?.name ??
+    `Département ${id}`;
+
+  openGeo("dep", id, String(label));
+});
+
+// Fleuves (lignes)
+map.on("click", "rivers-line", (e) => {
+  const feats = map.queryRenderedFeatures(e.point, { layers: ["rivers-line"] }) as any[];
+  const f = feats?.[0];
+  if (!f) return;
+
+  const id = f.properties?.ID; // ✅ fleuves_WGS84.geojson -> "ID"
+  if (id == null) return;
+
+  const label =
+    f.properties?.NOM_C_EAU ??
+    f.properties?.Nom ??
+    f.properties?.name ??
+    `Fleuve ${id}`;
+
+  openGeo("river", id, String(label));
+});
+
+// Rail (lignes)
+map.on("click", "rail-line", (e) => {
+  const feats = map.queryRenderedFeatures(e.point, { layers: ["rail-line"] }) as any[];
+  const f = feats?.[0];
+  if (!f) return;
+
+  const id = f.properties?.OBJECTID_1; // ✅ reseau_ferre_IDF.geojson -> "OBJECTID_1"
+  if (id == null) return;
+
+  const label =
+    f.properties?.res_com;
+  openGeo("rail", id, label);
+});
+
+// Cursors “cliquable”
+map.on("mouseenter", "idf-fill", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "idf-fill", () => (map.getCanvas().style.cursor = ""));
+map.on("mouseenter", "deps-fill", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "deps-fill", () => (map.getCanvas().style.cursor = ""));
+map.on("mouseenter", "rivers-line", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "rivers-line", () => (map.getCanvas().style.cursor = ""));
+map.on("mouseenter", "rail-line", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
+
+  // 2) Source...
+  addSongPointLayers(map);
+  addSelectionLayers(map);
+
+  // 3) Visibilité...
+  applyVisibilityRules(map);
+  map.on("zoom", () => applyVisibilityRules(map));
+  map.on("moveend", () => maybeFetchPoints(map));
+  map.on("zoomend", () => maybeFetchPoints(map));
+
+  // 4) Premier fetch
+  maybeFetchPoints(map);
+
+  // 5) Interactions
+ wireSongPointInteractions(
+  map,
+  (lng, lat) => coordIndexRef.current.get(coordKey(lng, lat)) ?? [],
+  (payload) => {
+
+    if (payload.mode === "single") {
+      setSelectedSong(payload.song);
+      setPointSongs([]);
+      setTab("lecture");
+      setSheetOpen(true);
+      setSheetSnap("full");
+      return;
+    }
+
+    setSelectedSong(null);
+    setPointSongs(payload.songs);
+    setSelectedPlaceLabel("Chansons à cet endroit");
+    setTab("liste");
+    setSheetOpen(true);
+    setSheetSnap("full");
+  });
+}); // ✅ IMPORTANT: fermeture du map.on("load")
 
     return () => {
       map.remove();
       mapRef.current = null;
     };
   }, [idfBounds]);
+
+  // Quand les filtres changent : invalide le cache bbox et refetch immédiatement
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    // Invalide la clé, sinon maybeFetchPoints peut refuser de refetch
+    setLastBboxKey("");
+
+    // Refetch (si on est au bon zoom)
+    maybeFetchPoints(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersKey]);
 
   return (
   <main className="h-dvh w-full">
@@ -157,364 +440,524 @@ map.on("error", (e) => {
       {/* Overlay haut */}
       <div className="absolute left-0 right-0 top-0 z-20 px-3 pt-3">
         <div className="mx-auto w-full max-w-[420px] space-y-2">
-          {/* Toggle Chanson / Lieu */}
-          <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
-            <div className="flex">
-              <button
-                className={[
-                  "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
-                  placeMode === "song"
-                    ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
-                    : "text-[color:var(--muted)]",
-                ].join(" ")}
-                onClick={() => setPlaceMode("song")}
-              >
-                Chanson
-              </button>
+          
+{pickOnMap ? (
+  <div className="absolute left-0 right-0 bottom-4 z-50 px-3">
+    <div className="mx-auto max-w-[420px] rounded-2xl border border-[color:var(--border)] bg-white/90 backdrop-blur px-3 py-3 shadow-lg">
+      <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+        Clique sur la carte pour placer le point 📍
+      </div>
+      <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+        (Le curseur devient une croix)
+      </div>
+      <button
+        className="mt-2 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
+        onClick={() => setPickOnMap(false)}
+      >
+        Annuler
+      </button>
+    </div>
+  </div>
+) : null}
 
-              <button
-                className={[
-                  "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
-                  placeMode === "place"
-                    ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
-                    : "text-[color:var(--muted)]",
-                ].join(" ")}
-                onClick={() => setPlaceMode("place")}
-              >
-                Lieu
-              </button>
-            </div>
+{pickToast ? (
+  <div className="absolute left-0 right-0 bottom-24 z-50 px-3">
+    <div className="mx-auto max-w-[420px] rounded-2xl border border-[color:var(--border)] bg-white/95 backdrop-blur px-3 py-2 shadow-lg text-[13px] font-semibold">
+      {pickToast}
+    </div>
+  </div>
+) : null}
+
+
+          {/* Toggle Chanson / Lieu */}
+{/* Barre principale : Filtrer / Rechercher */}
+<div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
+  <div className="flex">
+    <button
+      className={[
+        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+        topMode === "filter"
+          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+          : "text-[color:var(--muted)]",
+      ].join(" ")}
+      onClick={() => toggleTopMode("filter")}
+    >
+      Filtrer
+    </button>
+
+    <button
+      className={[
+        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+        topMode === "search"
+          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+          : "text-[color:var(--muted)]",
+      ].join(" ")}
+      onClick={() => toggleTopMode("search")}
+    >
+      Rechercher
+    </button>
+
+    <button
+      className={[
+        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+        topMode === "contribute"
+          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+          : "text-[color:var(--muted)]",
+      ].join(" ")}
+      onClick={() => {
+        setTopMode("contribute");
+        setSheetOpen(true);
+        setSheetSnap("full");
+        setContributionOpen(true);
+      }}
+    >
+      Contribuer
+    </button>
+  </div>
+</div>
+
+{/* Mode FILTRER */}
+{topMode === "filter" ? (
+  <FiltersPanel filters={filters} setFilters={setFilters} />
+) : null}
+
+{/* Mode RECHERCHER */}
+{topMode === "search" ? (
+  <>
+    {/* Sous-toggle : Chanson / Lieu */}
+    <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
+      <div className="flex">
+        <button
+  className={[
+    "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+    placeMode === "song"
+      ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+      : "text-[color:var(--muted)]",
+  ].join(" ")}
+  onClick={() => {
+    setPlaceMode("song");
+    const map = mapRef.current;
+    if (map) setOverlay(map, "none"); // ✅ on cache les geojson
+  }}
+>
+  Chanson
+</button>
+
+
+        <button
+          className={[
+            "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+            placeMode === "place"
+              ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+              : "text-[color:var(--muted)]",
+          ].join(" ")}
+          onClick={() => setPlaceMode("place")}
+        >
+          Lieu
+        </button>
+      </div>
+    </div>
+
+    {/* UI de recherche */}
+    {placeMode === "song" ? (
+      <SongSearch
+        loading={isLoadingPoints}
+        filters={filters}
+        onSelect={(song) => {
+          const map = mapRef.current;
+          if (!map) return;
+
+          setSelectedSong(song as any);
+          setSelectedPlace(song.place ?? "");
+          setTab("lecture");
+          setSheetOpen(true);
+          setSheetSnap("full");
+
+          if (typeof song.longitude === "number" && typeof song.latitude === "number") {
+            const targetZoom = Math.max(map.getZoom(), 13);
+            map.easeTo({
+              center: [song.longitude, song.latitude],
+              zoom: targetZoom,
+              duration: 650,
+            });
+            setSelectedPoint(map, song.longitude, song.latitude, song);
+          }
+        }}
+      />
+    ) : (
+      <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-visible">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border)]">
+          <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+            Recherche de lieu
           </div>
 
-          {/* ✅ Filtres (doit être DANS l’overlay) */}
-          <FiltersPanel filters={filters} setFilters={setFilters} />
+          <button
+            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--ink)]"
+            onClick={async () => {
+              if (!navigator.geolocation) {
+                alert("La géolocalisation n'est pas disponible.");
+                return;
+              }
 
-          {/* ✅ Recherche */}
-          {placeMode === "song" ? (
-            <SongSearch
-              loading={isLoadingPoints}
-              filters={filters}
-              onSelect={(song) => {
-                const map = mapRef.current;
-                if (!map) return;
+              navigator.geolocation.getCurrentPosition(
+                async (pos) => {
+                  const lat = pos.coords.latitude;
+                  const lng = pos.coords.longitude;
 
-                setSelectedSong(song as any);
-                setSelectedPlace(song.place ?? "");
-                setTab("lecture");
-                setSheetOpen(true);
-                setSheetSnap("full");
-
-                if (
-                  typeof song.longitude === "number" &&
-                  typeof song.latitude === "number"
-                ) {
-                  const targetZoom = Math.max(map.getZoom(), 13);
-                  map.easeTo({
-                    center: [song.longitude, song.latitude],
-                    zoom: targetZoom,
-                    duration: 650,
+                  const res = await fetch("/api/songs-nearby", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      lat,
+                      lng,
+                      radiusKm: 20,
+                      limit: 100,
+                      filters,
+                    }),
                   });
-                  setSelectedPoint(map, song.longitude, song.latitude, song);
-                }
-              }}
-            />
-          ) : (
-            <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-visible">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border)]">
-                <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-                  Recherche de lieu
-                </div>
 
-                <button
-                  className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--ink)]"
-                  onClick={async () => {
-                    if (!navigator.geolocation) {
-                      alert("La géolocalisation n'est pas disponible.");
-                      return;
-                    }
+                  if (!res.ok) return;
+                  const json = await res.json();
 
-                    navigator.geolocation.getCurrentPosition(
-                      async (pos) => {
-                        const lat = pos.coords.latitude;
-                        const lng = pos.coords.longitude;
+                  setSelectedPlaceLabel("Autour de moi (20 km)");
+                  setPlaceSongs(json.songs ?? []);
+                  setPlaceTotal((json.songs ?? []).length);
+                  setPlaceOffset((json.songs ?? []).length);
+                  setPlaceHasMore(false);
+                  setSelectedSong(null);
 
-                        const res = await fetch("/api/songs-nearby", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            lat,
-                            lng,
-                            radiusKm: 20,
-                            limit: 100,
-                            filters,
-                          }),
-                        });
+                  setTab("liste");
+                  setSheetOpen(true);
+                  setSheetSnap("full");
 
-                        if (!res.ok) return;
-                        const json = await res.json();
-
-                        setSelectedPlaceLabel("Autour de moi (20 km)");
-                        setPlaceSongs(json.songs ?? []);
-                        setPlaceTotal((json.songs ?? []).length);
-                        setPlaceOffset((json.songs ?? []).length);
-                        setPlaceHasMore(false);
-                        setSelectedSong(null);
-
-                        setTab("liste");
-                        setSheetOpen(true);
-                        setSheetSnap("full");
-
-                        const map = mapRef.current;
-                        if (map) {
-                          map.easeTo({
-                            center: [lng, lat],
-                            zoom: Math.max(map.getZoom(), 12),
-                            duration: 650,
-                          });
-                        }
-                      },
-                      (err) => {
-                        alert("Impossible d’obtenir la position.");
-                        console.error(err);
-                      },
-                      { enableHighAccuracy: true, timeout: 8000 }
-                    );
-                  }}
-                >
-                  Autour de moi
-                </button>
-              </div>
-
-              <div className="p-2">
-                <PlaceSearch
-                  filters={filters}
-                  onSelect={async (p) => {
-                    const map = mapRef.current;
-                    if (!map) return;
-
-                    setSelectedPlaceLabel(p.place);
-
-                    const res = await fetch("/api/songs-by-place", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        place: p.place,
-                        filters,
-                        offset: 0,
-                        limit: PLACE_PAGE_SIZE,
-                      }),
+                  const map = mapRef.current;
+                  if (map) {
+                    map.easeTo({
+                      center: [lng, lat],
+                      zoom: Math.max(map.getZoom(), 12),
+                      duration: 650,
                     });
+                  }
+                },
+                (err) => {
+                  alert("Impossible d’obtenir la position.");
+                  console.error(err);
+                },
+                { enableHighAccuracy: true, timeout: 8000 }
+              );
+            }}
+          >
+            Autour de moi
+          </button>
+        </div>
 
-                    if (!res.ok) return;
-                    const json = await res.json();
+        <div className="p-2">
+          <PlaceSearch
+            filters={filters}
+            onSelect={async (p) => {
+              const map = mapRef.current;
+              if (!map) return;
 
-                    setPlaceSongs(json.songs ?? []);
-                    setSelectedSong(null);
-                    setPlaceTotal(json.total ?? 0);
-                    setPlaceOffset((json.songs ?? []).length);
-                    setPlaceHasMore(Boolean(json.hasMore));
-                    setPlaceLoadingMore(false);
+              setSelectedPlaceLabel(p.place);
 
-                    setTab("liste");
-                    setSheetOpen(true);
-                    setSheetSnap("full");
+const ov = overlayFromPlace(p);
+setOverlay(map, ov);
 
-                    if (json.center && Array.isArray(json.center)) {
-                      map.easeTo({
-                        center: json.center,
-                        zoom: Math.max(map.getZoom(), 12),
-                        duration: 650,
-                      });
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          )}
+
+              const res = await fetch("/api/songs-by-place", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  place: p.place,
+                  filters,
+                  offset: 0,
+                  limit: PLACE_PAGE_SIZE,
+                }),
+              });
+
+              if (!res.ok) return;
+              const json = await res.json();
+
+              setPlaceSongs(json.songs ?? []);
+              setSelectedSong(null);
+              setPlaceTotal(json.total ?? 0);
+              setPlaceOffset((json.songs ?? []).length);
+              setPlaceHasMore(Boolean(json.hasMore));
+              setPlaceLoadingMore(false);
+
+              setTab("liste");
+              setSheetOpen(true);
+              setSheetSnap("full");
+
+              if (json.center && Array.isArray(json.center)) {
+                map.easeTo({
+                  center: json.center,
+                  zoom: Math.max(map.getZoom(), 12),
+                  duration: 650,
+                });
+              }
+            }}
+          />
+        </div>
+      </div>
+    )}
+  </>
+) : null}
+
         </div>
       </div>
 
       {/* Bottom sheet */}
-      <BottomSheet
-        open={sheetOpen}
-        snap={sheetSnap}
-        onSnap={setSheetSnap}
-        onClose={() => setSheetOpen(false)}
-        title={
-          selectedSong?.full_title ??
-          selectedSong?.title ??
-          selectedPlaceLabel ??
-          "Sélection"
-        }
-        subtitle={
-          selectedSong?.place
-            ? `${selectedSong.place}${
-                selectedSong.echelle ? ` · ${selectedSong.echelle}` : ""
-              }`
-            : selectedPlaceLabel
-            ? "Résultats pour ce lieu"
-            : undefined
-        }
-      >
-         <div className="p-3">
-    <div className="rounded-xl border border-[color:var(--border)] bg-white overflow-hidden">
-      <div className="flex">
-        <button
-          className={[
-            "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
-            tab === "lecture"
-              ? "text-[color:var(--ink)] border-[color:var(--primary)]"
-              : "text-[color:var(--muted)] border-[color:var(--border)]",
-          ].join(" ")}
-          onClick={() => setTab("lecture")}
-        >
-          Lecture
-        </button>
-
-        <button
-          className={[
-            "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
-            tab === "paroles"
-              ? "text-[color:var(--ink)] border-[color:var(--primary)]"
-              : "text-[color:var(--muted)] border-[color:var(--border)]",
-          ].join(" ")}
-          onClick={() => setTab("paroles")}
-        >
-          Paroles
-        </button>
-
-        {placeSongs.length > 0 ? (
+  {/* Bottom sheet */}
+<BottomSheet
+  open={sheetOpen}
+  snap={sheetSnap}
+  onSnap={setSheetSnap}
+  onClose={() => {
+    setSheetOpen(false);
+    setContributionOpen(false);
+    setPickOnMap(false);
+  }}
+  title={
+    contributionOpen
+      ? "Contribuer"
+      : selectedSong?.full_title ??
+        selectedSong?.title ??
+        selectedPlaceLabel ??
+        "Sélection"
+  }
+  subtitle={
+    contributionOpen
+      ? "Proposer une chanson"
+      : selectedSong?.place
+      ? `${selectedSong.place}${selectedSong.echelle ? ` · ${selectedSong.echelle}` : ""}`
+      : selectedPlaceLabel
+      ? "Résultats pour ce lieu"
+      : undefined
+  }
+>
+  {contributionOpen ? (
+    <ContributionPanel
+      draft={draft}
+      setDraft={setDraft}
+      pickOnMap={pickOnMap}
+      onPickOnMap={() => {
+        setPickOnMap(true);
+        setSheetSnap("collapsed"); // optionnel: laisse voir la carte
+      }}
+      onCancel={() => {
+        setContributionOpen(false);
+        setPickOnMap(false);
+      }}
+      onSubmit={submitContribution}
+    />
+  ) : (
+    <div className="p-3">
+      <div className="rounded-xl border border-[color:var(--border)] bg-white overflow-hidden">
+        <div className="flex">
           <button
             className={[
               "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
-              tab === "liste"
+              tab === "lecture"
                 ? "text-[color:var(--ink)] border-[color:var(--primary)]"
                 : "text-[color:var(--muted)] border-[color:var(--border)]",
             ].join(" ")}
-            onClick={() => setTab("liste")}
+            onClick={() => setTab("lecture")}
           >
-            Liste
+            Lecture
           </button>
-        ) : null}
-      </div>
 
-      {/* LECTURE */}
-      <div className={tab === "lecture" ? "block" : "invisible h-0 overflow-hidden"}>
-        {selectedSong ? (
-          <MediaBlock
-            song={{
-              youtube_embed: selectedSong.youtube_embed,
-              youtube_url: selectedSong.youtube_url,
-              spotify_url: selectedSong.spotify_url,
-              soundcloud_url: selectedSong.soundcloud_url,
-            }}
-          />
-        ) : (
-          <div className="p-3 text-[13px] text-[color:var(--muted)]">
-            Sélectionne une chanson pour afficher le lecteur.
-          </div>
-        )}
-      </div>
+          <button
+            className={[
+              "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
+              tab === "paroles"
+                ? "text-[color:var(--ink)] border-[color:var(--primary)]"
+                : "text-[color:var(--muted)] border-[color:var(--border)]",
+            ].join(" ")}
+            onClick={() => setTab("paroles")}
+          >
+            Paroles
+          </button>
 
-      {/* PAROLES */}
-      <div className={tab === "paroles" ? "block" : "hidden"}>
-        {selectedSong?.place ? (
-          <div className="px-3 pt-3">
+          {(placeSongs.length > 0 || pointSongs.length > 0) ? (
             <button
-              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--primary)]"
-              onClick={() => {
-                const el = document.getElementById("highlighted-place");
-                el?.scrollIntoView({ behavior: "smooth", block: "center" });
-              }}
+              className={[
+                "flex-1 px-3 py-2 text-[13px] font-semibold border-b",
+                tab === "liste"
+                  ? "text-[color:var(--ink)] border-[color:var(--primary)]"
+                  : "text-[color:var(--muted)] border-[color:var(--border)]",
+              ].join(" ")}
+              onClick={() => setTab("liste")}
             >
-              Voir le passage
-            </button>
-          </div>
-        ) : null}
-
-        <div className="p-3 whitespace-pre-wrap text-[13px] leading-6 text-[color:var(--ink)]">
-          {selectedSong && selectedSong.lyrics && selectedSong.place
-            ? renderLyricsWithHighlight(selectedSong.lyrics, selectedSong.place)
-            : selectedSong?.lyrics}
-        </div>
-      </div>
-
-      {/* LISTE */}
-      <div className={tab === "liste" ? "block" : "hidden"}>
-        <div className="p-3">
-          <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-            {selectedPlaceLabel || "Lieu"}
-          </div>
-
-          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-            {placeSongs.length.toLocaleString("fr-FR")} / {placeTotal.toLocaleString("fr-FR")} chansons
-          </div>
-
-          <div className="mt-3 space-y-2">
-            {placeSongs.map((s) => (
-              <button
-                key={s.id}
-                className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3"
-                onClick={() => {
-                  const map = mapRef.current;
-                  if (!map) return;
-
-                  setSelectedSong(s);
-                  setTab("lecture");
-                  setSheetOpen(true);
-                  setSheetSnap("full");
-
-                  if (typeof s.longitude === "number" && typeof s.latitude === "number") {
-                    map.easeTo({
-                      center: [s.longitude, s.latitude],
-                      zoom: Math.max(map.getZoom(), 13),
-                      duration: 650,
-                    });
-                    setSelectedPoint(map, s.longitude, s.latitude, s);
-                  }
-                }}
-              >
-                <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-                  {s.full_title ?? s.title ?? "Sans titre"}
-                </div>
-
-                <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-                  {(s.main_artist ?? s.artist_names ?? "—")}
-                  {typeof (s as any).distance_km === "number"
-                    ? ` · ${(s as any).distance_km.toFixed(1).replace(".", ",")} km`
-                    : ""}
-                </div>
-
-                {s.lyrics ? (
-                  <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">
-                    {renderLyricsExcerptWithHighlight(
-                      s.lyrics,
-                      selectedPlaceLabel && !selectedPlaceLabel.startsWith("Autour de moi")
-                        ? selectedPlaceLabel
-                        : (s.place ?? ""),
-                      90
-                    )}
-                  </div>
-                ) : null}
-              </button>
-            ))}
-          </div>
-
-          {placeHasMore ? (
-            <button
-              className="mt-3 w-full rounded-2xl border border-[color:var(--border)] bg-white px-3 py-3 text-[13px] font-semibold text-[color:var(--ink)]"
-              onClick={loadMorePlaceSongs}
-              disabled={placeLoadingMore}
-            >
-              {placeLoadingMore ? "Chargement…" : "Charger plus"}
+              Liste
             </button>
           ) : null}
         </div>
+
+        {/* LECTURE */}
+        <div className={tab === "lecture" ? "block" : "invisible h-0 overflow-hidden"}>
+          {selectedSong ? (
+            <>
+              {/* ✅ Infos chanson (badges) */}
+              <div className="px-3 pt-3">
+                <div className="flex flex-wrap gap-2">
+                  {selectedSong.language ? (
+                    <span className="rounded-full px-3 py-1 text-[12px] font-semibold bg-emerald-100 text-emerald-900 border border-emerald-200">
+                      Langue : {selectedSong.language}
+                    </span>
+                  ) : null}
+
+                  {selectedSong.decennie ? (
+                    <span className="rounded-full px-3 py-1 text-[12px] font-semibold bg-indigo-100 text-indigo-900 border border-indigo-200">
+                      Décennie : {selectedSong.decennie}
+                    </span>
+                  ) : null}
+
+                  {selectedSong.annee ? (
+                    <span className="rounded-full px-3 py-1 text-[12px] font-semibold bg-amber-100 text-amber-900 border border-amber-200">
+                      Année : {selectedSong.annee}
+                    </span>
+                  ) : null}
+
+                  {selectedSong.style ? (
+  selectedSong.style
+    .split(",")
+    .map((s: string) => s.trim())
+    .filter((s: string) => Boolean(s))
+    .slice(0, 2)
+    .map((s: string, i: number) => (
+      <span
+        key={`style-${i}`}
+        className="rounded-full px-3 py-1 text-[12px] font-semibold bg-pink-100 text-pink-900 border border-pink-200"
+      >
+        {s}
+      </span>
+    ))
+) : null}
+
+                </div>
+              </div>
+
+              <MediaBlock
+                song={{
+                  youtube_embed: selectedSong.youtube_embed,
+                  youtube_url: selectedSong.youtube_url,
+                  spotify_url: selectedSong.spotify_url,
+                  soundcloud_url: selectedSong.soundcloud_url,
+                }}
+              />
+            </>
+          ) : (
+            <div className="p-3 text-[13px] text-[color:var(--muted)]">
+              Sélectionne une chanson pour afficher le lecteur.
+            </div>
+          )}
+        </div>
+
+        {/* PAROLES */}
+        <div className={tab === "paroles" ? "block" : "hidden"}>
+          {selectedSong?.place ? (
+            <div className="px-3 pt-3">
+              <button
+                className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--primary)]"
+                onClick={() => {
+                  const el = document.getElementById("highlighted-place");
+                  el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+              >
+                Voir le passage
+              </button>
+            </div>
+          ) : null}
+
+          <div className="p-3 whitespace-pre-wrap text-[13px] leading-6 text-[color:var(--ink)]">
+            {selectedSong && selectedSong.lyrics && selectedSong.place
+              ? renderLyricsWithHighlight(selectedSong.lyrics, selectedSong.place)
+              : selectedSong?.lyrics}
+          </div>
+        </div>
+
+        {/* LISTE */}
+        <div className={tab === "liste" ? "block" : "hidden"}>
+          <div className="p-3">
+            <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+              {selectedPlaceLabel || "Lieu"}
+            </div>
+
+            <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+              {(pointSongs.length > 0 ? pointSongs.length : placeSongs.length).toLocaleString("fr-FR")}
+              {pointSongs.length > 0 ? " chanson(s)" : ` / ${placeTotal.toLocaleString("fr-FR")} chansons`}
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {(pointSongs.length > 0 ? pointSongs : placeSongs).map((s) => (
+                <button
+                  key={s.id}
+                  className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3"
+                  onClick={() => {
+                    const map = mapRef.current;
+                    if (!map) return;
+                    setPointSongs([]);
+                    setSelectedSong(s);
+
+                    setTab("lecture");
+                    setSheetOpen(true);
+                    setSheetSnap("full");
+
+                    if (typeof s.longitude === "number" && typeof s.latitude === "number") {
+                      map.easeTo({
+                        center: [s.longitude, s.latitude],
+                        zoom: Math.max(map.getZoom(), 13),
+                        duration: 650,
+                      });
+                      setSelectedPoint(map, s.longitude, s.latitude, s);
+                    }
+                  }}
+                >
+                  <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+                    {s.full_title ?? s.title ?? "Sans titre"}
+                  </div>
+
+                  <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+                    {(s.main_artist ?? s.artist_names ?? "—")}
+                    {typeof (s as any).distance_km === "number"
+                      ? ` · ${(s as any).distance_km.toFixed(1).replace(".", ",")} km`
+                      : ""}
+                  </div>
+
+                  {s.lyrics ? (
+                    <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">
+                      {renderLyricsExcerptWithHighlight(
+                        s.lyrics,
+                        (pointSongs.length > 0
+                          ? (s.place ?? "")
+                          : selectedPlaceLabel && !selectedPlaceLabel.startsWith("Autour de moi")
+                          ? selectedPlaceLabel
+                          : (s.place ?? "")),
+                        90
+                      )}
+                    </div>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+
+            {placeHasMore && pointSongs.length === 0 ? (
+              <button
+                className="mt-3 w-full rounded-2xl border border-[color:var(--border)] bg-white px-3 py-3 text-[13px] font-semibold text-[color:var(--ink)]"
+                onClick={loadMorePlaceSongs}
+                disabled={placeLoadingMore}
+              >
+                {placeLoadingMore ? "Chargement…" : "Charger plus"}
+              </button>
+            ) : null}
+          </div>
+        </div>
       </div>
     </div>
-  </div>
+  )}
+</BottomSheet>
 
-      </BottomSheet>
     </div>
   </main>
 );
@@ -553,12 +996,19 @@ async function loadMorePlaceSongs() {
     const z = map.getZoom();
 
     // Ne pas charger/afficher en-dessous du zoom IDF
-    if (z < Z_CLUSTERS_START) return;
-
     const b = map.getBounds();
-    const key = `${z.toFixed(2)}:${b.getWest().toFixed(3)},${b.getSouth().toFixed(
-      3
-    )},${b.getEast().toFixed(3)},${b.getNorth().toFixed(3)}`;
+        const f = filtersRef.current;
+const filtersKey = JSON.stringify({
+  artists: [...f.artists].sort(),
+  decennies: [...f.decennies].sort(),
+  styles: [...f.styles].sort(),
+  languages: [...f.languages].sort(),
+});
+
+const key = `${filtersKey}|${z.toFixed(2)}:${b.getWest().toFixed(3)},${b
+  .getSouth()
+  .toFixed(3)},${b.getEast().toFixed(3)},${b.getNorth().toFixed(3)}`;
+
 
     // Évite de refetch si on n’a pas changé “sensiblement”
     if (key === lastBboxKey) return;
@@ -572,13 +1022,13 @@ async function loadMorePlaceSongs() {
       url.searchParams.set("maxLng", String(b.getEast()));
       url.searchParams.set("maxLat", String(b.getNorth()));
       url.searchParams.set("zoom", String(z));
-      for (const a of filters.artists) url.searchParams.append("artist", a);
-for (const d of filters.decennies) url.searchParams.append("decennie", d);
-for (const s of filters.styles) url.searchParams.append("style", s);
-for (const e of filters.echelles) url.searchParams.append("echelle", e);
-for (const l of filters.languages) url.searchParams.append("language", l);
-for (const e2 of filters.echelle2s) url.searchParams.append("echelle2", e2);
-for (const st of filters.sous_types) url.searchParams.append("sous_type", st);
+      const f = filtersRef.current;
+
+      for (const a of f.artists) url.searchParams.append("artist", a);
+      for (const d of f.decennies) url.searchParams.append("decennie", d);
+      for (const s of f.styles) url.searchParams.append("style", s);
+      for (const l of f.languages) url.searchParams.append("language", l);
+
       const res = await fetch(url.toString());
 
 if (!res.ok) {
@@ -588,8 +1038,62 @@ if (!res.ok) {
 
 const fc = (await res.json()) as GeoJSONFC;
 
-      const src = map.getSource("songs") as maplibregl.GeoJSONSource | undefined;
-      if (src) src.setData(fc);
+const src = map.getSource("songs") as maplibregl.GeoJSONSource | undefined;
+if (src) src.setData(fc);
+
+// ✅ mémorise les points actuellement chargés (filtrés + bbox courante)
+pointsGeojsonRef.current = fc;
+
+// ✅ construit l’index coords -> liste de chansons
+const idx = new Map<string, SongPoint[]>();
+
+for (const feat of fc.features as any[]) {
+  const coords = feat?.geometry?.coordinates;
+  if (!coords || coords.length < 2) continue;
+  const [lng, lat] = coords as [number, number];
+
+  const props = feat.properties ?? {};
+  const song: SongPoint = {
+    id: props.id,
+    anciens_id: props.anciens_id ?? null,
+    genius_song_id: props.genius_song_id,
+    full_title: props.full_title,
+    title: props.title,
+    main_artist: props.main_artist,
+    artist_names: props.artist_names,
+    place: props.place,
+    echelle: props.echelle,
+    echelle2: props.echelle2,
+    sous_type: props.sous_type,
+    latitude: props.latitude ? Number(props.latitude) : null,
+    longitude: props.longitude ? Number(props.longitude) : null,
+    youtube_embed: props.youtube_embed,
+    youtube_url: props.youtube_url,
+    spotify_url: props.spotify_url,
+    soundcloud_url: props.soundcloud_url,
+    lyrics: props.lyrics,
+    annee: props.annee,
+    decennie: props.decennie,
+    distance_km: props.distance_km ? Number(props.distance_km) : null,
+    language: props.language ?? null,
+    style: props.style ?? null,
+  };
+
+  const k = coordKey(lng, lat);
+  const arr = idx.get(k) ?? [];
+  arr.push(song);
+  idx.set(k, arr);
+}
+
+for (const arr of idx.values()) {
+  arr.sort((a, b) =>
+    (a.full_title ?? a.title ?? "").localeCompare(b.full_title ?? b.title ?? "")
+  );
+}
+
+coordIndexRef.current = idx;
+
+
     } catch (e) {
       console.error(e);
     } finally {
@@ -611,6 +1115,7 @@ async function addContextLayers(map: MLMap) {
     id: "idf-fill",
     type: "fill",
     source: "idf-region",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "fill-color": "#f1b56a", // orangé doux
       "fill-opacity": 0.35,
@@ -621,6 +1126,7 @@ async function addContextLayers(map: MLMap) {
     id: "idf-outline",
     type: "line",
     source: "idf-region",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "line-color": "#c9853f",
       "line-width": 2,
@@ -637,6 +1143,7 @@ async function addContextLayers(map: MLMap) {
     id: "deps-fill",
     type: "fill",
     source: "idf-deps",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "fill-color": "#f1a65f",
       "fill-opacity": 0.6, // demandé : 60% transparent
@@ -647,6 +1154,7 @@ async function addContextLayers(map: MLMap) {
     id: "deps-outline",
     type: "line",
     source: "idf-deps",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "line-color": "#d8893f",
       "line-width": 1.5,
@@ -662,6 +1170,7 @@ async function addContextLayers(map: MLMap) {
     id: "rivers-line",
     type: "line",
     source: "idf-rivers",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "line-color": "#2a78ff",
       "line-width": 2.5,
@@ -677,6 +1186,7 @@ async function addContextLayers(map: MLMap) {
     id: "rail-line",
     type: "line",
     source: "idf-rail",
+    layout: { visibility: "none" },   // ✅ caché par défaut
     paint: {
       "line-color": "#6b5b4a",
       "line-width": 2,
@@ -754,24 +1264,11 @@ function addSongPointLayers(map: MLMap) {
 function applyVisibilityRules(map: MLMap) {
   const z = map.getZoom();
 
-  // 1) IDF (grand dézoom)
-  const idfVisible = z <= Z_IDF_ONLY;
-  setVis(map, "idf-fill", idfVisible);
-  setVis(map, "idf-outline", idfVisible);
+  // ✅ Clusters visibles partout
+  setVis(map, "clusters", true);
+  setVis(map, "cluster-count", true);
 
-  // 2) Départements + fleuves + rail (zoom moyen)
-  const contextVisible = z > Z_CONTEXT_START && z <= Z_CONTEXT_END;
-  setVis(map, "deps-fill", contextVisible);
-  setVis(map, "deps-outline", contextVisible);
-  setVis(map, "rivers-line", contextVisible);
-  setVis(map, "rail-line", contextVisible);
-
-  // 3) Clusters (zoom moyen et fort, jusqu’aux points)
-  const clustersVisible = z >= Z_CLUSTERS_START && z < Z_POINTS_START;
-  setVis(map, "clusters", clustersVisible);
-  setVis(map, "cluster-count", clustersVisible);
-
-  // 4) Points (fort zoom)
+  // ✅ Points individuels seulement à fort zoom
   setVis(map, "unclustered", z >= Z_POINTS_START);
 }
 
@@ -828,60 +1325,92 @@ function setSelectedPoint(map: MLMap, lng: number, lat: number, props: any) {
 }
 
 
+
 function wireSongPointInteractions(
   map: MLMap,
-  onSelect: (song: SongPoint) => void
+  getSongsAt: (lng: number, lat: number) => SongPoint[],
+  onSelect: (
+    payload:
+      | { mode: "single"; song: SongPoint }
+      | { mode: "multi"; songs: SongPoint[] }
+  ) => void
 ) {
-  // Clic cluster => zoom in sur le cluster
+
+
+    // ✅ Clic cluster => zoom in sur le cluster
   map.on("click", "clusters", (e) => {
-  const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
-  const f = features[0];
-  if (!f) return;
-
-  const clusterId = f.properties?.cluster_id;
-  if (clusterId === undefined || clusterId === null) return;
-
-  const source = map.getSource("songs") as maplibregl.GeoJSONSource;
-
-// Typings récents : Promise<number>
-(source as any).getClusterExpansionZoom(clusterId).then((zoom: number) => {
-  const coords = (f.geometry as any).coordinates as [number, number];
-  map.easeTo({ center: coords, zoom });
-});
-});
-
-  // Clic point => ouvre bottom sheet
-  map.on("click", "unclustered", (e) => {
-    const f = e.features?.[0];
+    const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
+    const f = features[0];
     if (!f) return;
 
+    const clusterId = f.properties?.cluster_id;
+    if (clusterId === undefined || clusterId === null) return;
+
+    const source = map.getSource("songs") as maplibregl.GeoJSONSource;
     const coords = (f.geometry as any).coordinates as [number, number];
 
-    const props = f.properties ?? {};
-    const song: SongPoint = {
-      id: props.id,
-      genius_song_id: props.genius_song_id,
-      full_title: props.full_title,
-      title: props.title,
-      main_artist: props.main_artist,
-      artist_names: props.artist_names,
-      place: props.place,
-      echelle: props.echelle,
-      echelle2: props.echelle2,
-      sous_type: props.sous_type,
-      latitude: props.latitude ? Number(props.latitude) : null,
-      longitude: props.longitude ? Number(props.longitude) : null,
-      youtube_embed: props.youtube_embed,
-      youtube_url: props.youtube_url,
-      spotify_url: props.spotify_url,
-      soundcloud_url: props.soundcloud_url,
-      lyrics: props.lyrics,
-      annee: props.annee,
-      decennie: props.decennie,
-    };
-    onSelect(song);
-    setSelectedPoint(map, coords[0], coords[1], song);
+    (source as any).getClusterExpansionZoom(clusterId).then((zoom: number) => {
+      map.easeTo({ center: coords, zoom, duration: 450 });
+    });
   });
+
+  // Clic cluster => zoom in sur le cluster
+    // Clic point => si plusieurs chansons au même point : ouvrir la liste
+    map.on("click", "unclustered", (e) => {
+    // 🔥 récupère toutes les features sous le clic (pas seulement la première)
+    const feats = map.queryRenderedFeatures(e.point, { layers: ["unclustered"] }) as any[];
+    if (!feats?.length) return;
+
+    // Convertit chaque feature en SongPoint
+    const songsAtPixel: SongPoint[] = feats.map((feat) => {
+      const props = feat.properties ?? {};
+      return {
+        id: props.id,
+          anciens_id: props.anciens_id ?? null,
+        genius_song_id: props.genius_song_id,
+        full_title: props.full_title,
+        title: props.title,
+        main_artist: props.main_artist,
+        artist_names: props.artist_names,
+        place: props.place,
+        echelle: props.echelle,
+        echelle2: props.echelle2,
+        sous_type: props.sous_type,
+        latitude: props.latitude ? Number(props.latitude) : null,
+        longitude: props.longitude ? Number(props.longitude) : null,
+        youtube_embed: props.youtube_embed,
+        youtube_url: props.youtube_url,
+        spotify_url: props.spotify_url,
+        soundcloud_url: props.soundcloud_url,
+        lyrics: props.lyrics,
+        annee: props.annee,
+        decennie: props.decennie,
+        distance_km: props.distance_km ? Number(props.distance_km) : null,
+        language: props.language ?? null,
+        style: props.style ?? null,
+      };
+    });
+
+    // coords du point cliqué (pour le halo)
+    const coords = (feats[0].geometry as any).coordinates as [number, number];
+    const [lng, lat] = coords;
+
+    // Si plusieurs chansons au même pixel => liste
+    if (songsAtPixel.length > 1) {
+      songsAtPixel.sort((a, b) =>
+        (a.full_title ?? a.title ?? "").localeCompare(b.full_title ?? b.title ?? "")
+      );
+      onSelect({ mode: "multi", songs: songsAtPixel });
+      setSelectedPoint(map, lng, lat, { kind: "multi", count: songsAtPixel.length });
+      return;
+    }
+
+    // Sinon => comportement normal
+    const one = songsAtPixel[0];
+    onSelect({ mode: "single", song: one });
+    setSelectedPoint(map, lng, lat, one);
+  });
+
 
   map.on("mouseenter", "clusters", () => map.getCanvas().style.cursor = "pointer");
   map.on("mouseleave", "clusters", () => map.getCanvas().style.cursor = "");
@@ -1031,14 +1560,19 @@ function renderLyricsExcerptWithHighlight(
   );
 }
 
+type Filters = {
+  artists: string[];
+  decennies: string[];
+  styles: string[];
+  languages: string[];
+};
+
 function FiltersPanel({
   filters,
   setFilters,
 }: {
-  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[]; echelle2s: string[]; sous_types: string[]};
-setFilters: React.Dispatch<
-  React.SetStateAction<{ artists: string[]; echelles: string[]; decennies: string[]; styles: string[]; languages: string[]; echelle2s: string[]; sous_types: string[]}>
->;
+  filters: Filters;
+  setFilters: React.Dispatch<React.SetStateAction<Filters>>;
 }) {
   const [open, setOpen] = useState(false);
   const [artistInput, setArtistInput] = useState("");
@@ -1051,12 +1585,27 @@ const [styleOpen, setStyleOpen] = useState(false);
 
 const [artistOptions, setArtistOptions] = useState<{ label: string; count: number }[]>([]);
 const [styleOptions, setStyleOptions] = useState<{ label: string; count: number }[]>([]);
-const [echelle2Options, setEchelle2Options] = useState<{ label: string; count: number }[]>([]);
-const [sousTypeOptions, setSousTypeOptions] = useState<{ label: string; count: number }[]>([]);
+type SuggestKind = "artist" | "style" | "language";
 
-type SuggestKind = "artist" | "style" | "language" | "echelle2" | "sous_type";
+const SUGGEST_DEBOUNCE_MS = 300;
+const SUGGEST_TTL_MS = 60_000;
 
-async function fetchSuggest(kind: SuggestKind, q: string) {
+// Cache: key = `${kind}||${qNorm}`
+const suggestCacheRef = useRef(
+  new Map<string, { ts: number; options: { label: string; count: number }[] }>()
+);
+
+// Pour debounce (un timer par kind)
+const suggestTimerRef = useRef<Record<string, number | undefined>>({});
+
+// Pour éviter qu’une réponse lente écrase une recherche plus récente
+const suggestReqIdRef = useRef<Record<string, number>>({});
+
+function normQ(q: string) {
+  return q.trim().toLowerCase();
+}
+
+async function fetchSuggestNow(kind: SuggestKind, q: string) {
   const url = new URL("/api/filter-suggest", window.location.origin);
   url.searchParams.set("kind", kind);
   url.searchParams.set("q", q);
@@ -1067,6 +1616,42 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
   return (json.options ?? []) as { label: string; count: number }[];
 }
 
+function scheduleSuggest(
+  kind: SuggestKind,
+  q: string,
+  setOptions: (opts: { label: string; count: number }[]) => void,
+  setOpenList?: (v: boolean) => void
+) {
+  const qn = normQ(q);
+  const cacheKey = `${kind}||${qn}`;
+
+  // Cache hit
+  const hit = suggestCacheRef.current.get(cacheKey);
+  if (hit && Date.now() - hit.ts < SUGGEST_TTL_MS) {
+    setOptions(hit.options);
+    if (setOpenList) setOpenList(true);
+    return;
+  }
+
+  // Debounce
+  if (suggestTimerRef.current[kind]) {
+    window.clearTimeout(suggestTimerRef.current[kind]);
+  }
+
+  suggestTimerRef.current[kind] = window.setTimeout(async () => {
+    const reqId = (suggestReqIdRef.current[kind] ?? 0) + 1;
+    suggestReqIdRef.current[kind] = reqId;
+
+    const opts = await fetchSuggestNow(kind, qn);
+
+    // Si une requête plus récente existe, on ignore la réponse
+    if (suggestReqIdRef.current[kind] !== reqId) return;
+
+    suggestCacheRef.current.set(cacheKey, { ts: Date.now(), options: opts });
+    setOptions(opts);
+    if (setOpenList) setOpenList(true);
+  }, SUGGEST_DEBOUNCE_MS);
+}
 
   const decades = [
     "1950-1960",
@@ -1079,7 +1664,7 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
     "2020-2030",
   ];
 
-  function addChip(kind: "artists" | "styles" | "languages" | "echelle2s" | "sous_types", value: string) {
+  function addChip(kind: "artists" | "styles" | "languages", value: string) {
   const v = value.trim();
   if (!v) return;
 
@@ -1095,7 +1680,7 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
 }
 
   function removeChip(
-  kind: "artists" | "styles" | "decennies" | "languages" | "echelle2s" | "sous_types",
+  kind: "artists" | "styles" | "decennies" | "languages",
   value: string
 ) {
   setFilters((prev) => ({
@@ -1113,18 +1698,15 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
     }));
   }
 
-  function clearAll() {
-    setFilters({ artists: [], echelles: [], decennies: [], styles: [], languages: [], echelle2s: [], sous_types: [] });
-  }
+ function clearAll() {
+  setFilters({ artists: [], decennies: [], styles: [], languages: [] } as Filters);
+}
 
   const count =
   filters.artists.length +
   filters.decennies.length +
   filters.styles.length +
-  filters.echelles.length +
-  filters.languages.length +
-  filters.echelle2s.length +
-  filters.sous_types.length;
+  filters.languages.length;
 
   return (
     <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-hidden">
@@ -1152,12 +1734,6 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
               {filters.languages.map((l) => (
   <Chip key={`l-${l}`} label={l} onRemove={() => removeChip("languages", l)} />
 ))}
-{filters.echelle2s.map((v) => (
-  <Chip key={`e2-${v}`} label={v} onRemove={() => removeChip("echelle2s", v)} />
-))}
-{filters.sous_types.map((v) => (
-  <Chip key={`st-${v}`} label={v} onRemove={() => removeChip("sous_types", v)} />
-))}
               <button
                 className="text-[12px] font-semibold text-[color:var(--primary)] underline"
                 onClick={clearAll}
@@ -1178,14 +1754,10 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
         onChange={async (e) => {
           const v = e.target.value;
           setArtistInput(v);
-          const opts = await fetchSuggest("artist", v);
-          setArtistOptions(opts);
-          setArtistOpen(true);
+          scheduleSuggest("artist", v, setArtistOptions, setArtistOpen);
         }}
         onFocus={async () => {
-          const opts = await fetchSuggest("artist", artistInput);
-          setArtistOptions(opts);
-          setArtistOpen(true);
+          scheduleSuggest("artist", artistInput, setArtistOptions, setArtistOpen);
         }}
         onBlur={() => {
           // petit délai pour laisser le click sur une option
@@ -1245,14 +1817,10 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
         onChange={async (e) => {
           const v = e.target.value;
           setStyleInput(v);
-          const opts = await fetchSuggest("style", v);
-          setStyleOptions(opts);
-          setStyleOpen(true);
+          scheduleSuggest("style", v, setStyleOptions, setStyleOpen);
         }}
         onFocus={async () => {
-          const opts = await fetchSuggest("style", styleInput);
-          setStyleOptions(opts);
-          setStyleOpen(true);
+          scheduleSuggest("style", styleInput, setStyleOptions, setStyleOpen);
         }}
         onBlur={() => window.setTimeout(() => setStyleOpen(false), 120)}
         onKeyDown={(e) => {
@@ -1295,10 +1863,6 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
         ))}
       </div>
     ) : null}
-
-    <div className="mt-2 text-[12px] text-[color:var(--muted)]">
-      Astuce : si tu sélectionnes “rap”, une chanson avec “r&amp;b, pop, rap” sera gardée.
-    </div>
   </div>
 </div>
 
@@ -1311,8 +1875,7 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
     defaultValue=""
     onFocus={async () => {
       // charge la liste au moment où tu ouvres
-      const opts = await fetchSuggest("language", "");
-      setLanguageOptions(opts);
+    scheduleSuggest("language", "", setLanguageOptions);
     }}
     onChange={(e) => {
       const v = e.target.value;
@@ -1328,62 +1891,6 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
   >
     <option value="">Choisir une langue…</option>
     {languageOptions.map((o) => (
-      <option key={o.label} value={o.label}>
-        {o.label} ({o.count})
-      </option>
-    ))}
-  </select>
-</div>
-
-{/* Échelle 2 (menu déroulant) */}
-<div>
-  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Échelle 2</div>
-
-  <select
-    className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
-    defaultValue=""
-    onFocus={async () => {
-      if (echelle2Options.length) return;
-      const opts = await fetchSuggest("echelle2", "");
-      setEchelle2Options(opts);
-    }}
-    onChange={(e) => {
-      const v = e.target.value;
-      if (!v) return;
-      addChip("echelle2s", v);
-      e.currentTarget.value = "";
-    }}
-  >
-    <option value="">Choisir une échelle 2…</option>
-    {echelle2Options.map((o) => (
-      <option key={o.label} value={o.label}>
-        {o.label} ({o.count})
-      </option>
-    ))}
-  </select>
-</div>
-
-{/* Sous-type (menu déroulant) */}
-<div>
-  <div className="text-[12px] font-semibold text-[color:var(--muted)] mb-2">Sous-type</div>
-
-  <select
-    className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
-    defaultValue=""
-    onFocus={async () => {
-      if (sousTypeOptions.length) return;
-      const opts = await fetchSuggest("sous_type", "");
-      setSousTypeOptions(opts);
-    }}
-    onChange={(e) => {
-      const v = e.target.value;
-      if (!v) return;
-      addChip("sous_types", v);
-      e.currentTarget.value = "";
-    }}
-  >
-    <option value="">Choisir un sous-type…</option>
-    {sousTypeOptions.map((o) => (
       <option key={o.label} value={o.label}>
         {o.label} ({o.count})
       </option>
@@ -1420,7 +1927,7 @@ async function fetchSuggest(kind: SuggestKind, q: string) {
 
     <button
       className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[13px] font-semibold"
-      onClick={() => setOpen(true)}
+      onClick={() => setOpen(false)}
     >
       OK
     </button>
@@ -1651,6 +2158,165 @@ function MediaBlock({
           Si la vidéo est indisponible dans l’application, utilise un lien externe Youtube/Spotify/SoundCloud ci-dessus.
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function pickLabel(props: any, fallback: string) {
+  return (
+    props?.name ??
+    props?.nom ??
+    props?.NOM ??
+    props?.libelle ??
+    props?.LIBELLE ??
+    props?.NOM_DEPT ??
+    props?.dep_name ??
+    fallback
+  );
+}
+
+function setOverlay(map: MLMap, overlay: Overlay) {
+  // tout cacher
+  setVis(map, "idf-fill", false);
+  setVis(map, "idf-outline", false);
+  setVis(map, "deps-fill", false);
+  setVis(map, "deps-outline", false);
+  setVis(map, "rivers-line", false);
+  setVis(map, "rail-line", false);
+
+  // puis montrer seulement celui voulu
+  if (overlay === "idf") {
+    setVis(map, "idf-fill", true);
+    setVis(map, "idf-outline", true);
+  }
+  if (overlay === "dep") {
+    setVis(map, "deps-fill", true);
+    setVis(map, "deps-outline", true);
+  }
+  if (overlay === "river") setVis(map, "rivers-line", true);
+  if (overlay === "rail") setVis(map, "rail-line", true);
+}
+
+function overlayFromPlace(p: PlaceSearchResult): Overlay {
+  // Département
+  if (p.echelle2 === "Département") return "dep";
+
+  // Fleuves
+  if (p.echelle === "Région" && p.sous_type === "Fleuves") return "river";
+
+  // Rail
+  if (p.echelle === "Région" && p.sous_type === "Lignes de trains - métros")
+    return "rail";
+
+  // IDF : région sans sous-type
+  if (p.echelle === "Région" && (!p.sous_type || p.sous_type.trim() === ""))
+    return "idf";
+
+  return "none";
+}
+
+function ContributionPanel({
+  draft,
+  setDraft,
+  pickOnMap,
+  onPickOnMap,
+  onCancel,
+  onSubmit,
+}: {
+  draft: ContributionDraft;
+  setDraft: React.Dispatch<React.SetStateAction<ContributionDraft>>;
+  pickOnMap: boolean;
+  onPickOnMap: () => void;
+  onCancel: () => void;
+  onSubmit: () => void | Promise<void>;
+}) {
+  const needCoords = draft.latitude == null || draft.longitude == null;
+  return (
+    <div className="p-3 space-y-3">
+      <div className="text-[14px] font-semibold text-[color:var(--ink)]">
+        Proposer une chanson
+      </div>
+
+      <input
+        value={draft.title}
+        onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+        placeholder="Titre"
+        className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <input
+        value={draft.main_artist}
+        onChange={(e) => setDraft((d) => ({ ...d, main_artist: e.target.value }))}
+        placeholder="Nom de l'artiste"
+        className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <input
+        value={draft.place}
+        onChange={(e) => {
+          const place = e.target.value;
+          setDraft((d) => ({
+            ...d,
+            place,
+            // reset coords quand on change de lieu (on recalculera / repick)
+            latitude: null,
+            longitude: null,
+          }));
+        }}
+        placeholder="Lieu mentionné dans la chanson"
+        className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <input
+        value={draft.youtube_url}
+        onChange={(e) => setDraft((d) => ({ ...d, youtube_url: e.target.value }))}
+        placeholder="Lien YouTube"
+        className="w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] outline-none"
+      />
+
+      <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] p-3">
+        <div className="text-[12px] font-semibold text-[color:var(--muted)]">
+          Coordonnées (si le lieu n’existe pas)
+        </div>
+
+        {needCoords ? (
+          <>
+            <button
+              type="button"
+              className="mt-2 w-full rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] font-semibold"
+              onClick={onPickOnMap}
+            >
+              {pickOnMap ? "Clique sur la carte…" : "Choisir sur la carte"}
+            </button>
+
+            {pickOnMap ? (
+              <div className="mt-2 text-[12px] text-[color:var(--primary)]">
+                Clique sur la carte pour placer le point 📍
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="mt-2 text-[12px] text-[color:var(--muted)]">
+            {draft.latitude?.toFixed(5)}, {draft.longitude?.toFixed(5)}
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          className="flex-1 rounded-xl border border-[color:var(--border)] bg-white px-3 py-2 text-[13px] font-semibold"
+          onClick={onCancel}
+        >
+          Annuler
+        </button>
+
+        <button
+          className="flex-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--primary)] px-3 py-2 text-[13px] font-semibold text-white"
+          onClick={onSubmit}
+        >
+          Envoyer
+        </button>
+      </div>
     </div>
   );
 }

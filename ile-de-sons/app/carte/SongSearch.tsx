@@ -62,7 +62,7 @@ export default function SongSearch({
 }: {
   onSelect: (song: SongSearchResult) => void;
   loading?: boolean;
-  filters: { artists: string[]; echelles: string[]; decennies: string[]; styles: string[] };
+  filters: { artists: string[]; decennies: string[]; styles: string[] };
 }) {
 
   const [q, setQ] = useState("");
@@ -102,7 +102,6 @@ url.searchParams.set("q", q.trim());
 for (const a of filters.artists) url.searchParams.append("artist", a);
 for (const d of filters.decennies) url.searchParams.append("decennie", d);
 for (const s of filters.styles) url.searchParams.append("style", s);
-for (const e of filters.echelles) url.searchParams.append("echelle", e);
 
 const res = await fetch(url.toString(), { signal: ac.signal });
 
@@ -167,7 +166,7 @@ const res = await fetch(url.toString(), { signal: ac.signal });
                 if (s) pick(s);
               }
             }}
-            placeholder="Titre, artiste, extrait de paroles…"
+            placeholder="Rechercher un titre de chanson"
             className="
               w-full rounded-xl border border-[color:var(--border)]
               bg-white px-3 py-2 text-[13px]

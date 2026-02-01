@@ -11,8 +11,7 @@ export type PlaceSearchResult = {
 };
 
 type Filters = {
-  artists: string[];
-  echelles: string[];   // ex: ["Rue","Commune","Département","Région"]
+  artists: string[];   // ex: ["Rue","Commune","Département","Région"]
   decennies: string[];
   styles: string[];
 };
@@ -82,7 +81,7 @@ export default function PlaceSearch({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onFocus={() => shown.length && setOpen(true)}
-            placeholder="Rechercher un lieu (dép, commune, gare, fleuve, lieu précis...)"
+            placeholder="Lieu précis, commune, gare, fleuve, départmt..."
             className="w-full bg-transparent outline-none text-[14px] text-[color:var(--ink)] placeholder:text-[color:var(--muted)]"
             onKeyDown={(e) => {
               if (!open && e.key === "ArrowDown" && shown.length) setOpen(true);

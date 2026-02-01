@@ -13,7 +13,9 @@ export async function GET(req: Request) {
 const decennies = searchParams.getAll("decennie").filter(Boolean);
 const styles = searchParams.getAll("style").filter(Boolean);
 const echelles = searchParams.getAll("echelle").filter(Boolean);
-
+  const languages = searchParams.getAll("language").filter(Boolean);
+  const echelle2s = searchParams.getAll("echelle2").filter(Boolean);
+  const sousTypes = searchParams.getAll("sous_type").filter(Boolean);
 
   if (
     !Number.isFinite(minLng) ||
@@ -33,9 +35,9 @@ const echelles = searchParams.getAll("echelle").filter(Boolean);
   let query = supabase
   .from("chansons")
   .select(
-    "id, genius_song_id, full_title, title, main_artist, artist_names, place, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie, style"
-  )
-  .in("echelle", ["Rue", "Commune"])
+  "id, anciens_id, genius_song_id, full_title, title, main_artist, artist_names, place, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie, style, language"
+)
+  .in("echelle", ["Rue", "Commune", "Région"])
   .not("latitude", "is", null)
   .not("longitude", "is", null)
   .gte("longitude", minLng)
@@ -68,6 +70,21 @@ if (echelles.length) {
   if (echelles.includes("Région")) ors.push("echelle.eq.Région");
   if (echelles.includes("Département")) ors.push("echelle2.eq.Département");
   if (ors.length) query = query.or(ors.join(","));
+}
+
+// Langues
+if (languages.length) {
+  query = query.in("language", languages);
+}
+
+// echelle2 (utile pour Département / Paris)
+if (echelle2s.length) {
+  query = query.in("echelle2", echelle2s);
+}
+
+// sous_type
+if (sousTypes.length) {
+  query = query.in("sous_type", sousTypes);
 }
 
 const { data, error } = await query.limit(6000);

@@ -35,8 +35,8 @@ export async function POST(req: Request) {
   let query = supabase
     .from("chansons")
     .select(
-      "id,genius_song_id,full_title,title,main_artist,artist_names,place,echelle,echelle2,sous_type,latitude,longitude,youtube_embed,youtube_url,spotify_url,soundcloud_url,lyrics,annee,decennie,style"
-    )
+  "id, genius_song_id, full_title, title, main_artist, artist_names, place, anciens_id, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie, language"
+)
     .eq("place", p)
 .range(offset, offset + limit - 1);
 

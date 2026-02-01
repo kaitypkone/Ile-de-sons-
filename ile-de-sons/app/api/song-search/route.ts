@@ -1,3 +1,15 @@
+function normQ(s: string) {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // enlève accents
+    .toLowerCase()
+    .replace(/[’']/g, " ")          // apostrophes -> espace
+    .replace(/[-‐-‒–—―]/g, " ")      // tirets -> espace
+    .replace(/[^a-z0-9]+/g, " ")     // tout le reste -> espace
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -59,13 +71,16 @@ const languages = searchParams.getAll("language").filter(Boolean);
   // Tolérant à la casse via ilike. V1 = pas de “typos”, mais déjà très utile.
 
  // On cherche sur plusieurs champs en OR.
-const like = `%${qRaw}%`;
-const loose = `%${qRaw.replace(/[\s\-’'"]+/g, "%")}%`;
+const q = normQ(qRaw);
+const like = `%${q}%`;
 
-// Groupe de recherche (OR)
-const searchGroup = `or(title.ilike.${like},full_title.ilike.${like},artist_names.ilike.${like},main_artist.ilike.${like},lyrics.ilike.${like},title.ilike.${loose},full_title.ilike.${loose})`;
+// version “tokens” : "joe taxi" -> "%joe%taxi%"
+const loose = `%${q.split(" ").join("%")}%`;
 
-const andParts: string[] = [searchGroup];
+const andParts: string[] = [
+  `or(title_norm.ilike.${like},title_norm.ilike.${loose})`,
+];
+
 
 // Filtre artistes (OR entre main_artist et artist_names, et OR entre les artistes sélectionnés)
 if (artists.length) {
@@ -96,13 +111,13 @@ if (echelles.length) {
 let query = supabase
   .from("chansons")
   .select(
-    "id, genius_song_id, full_title, title, main_artist, artist_names, place, anciens_id, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie"
-  )
+  "id, genius_song_id, full_title, title, main_artist, artist_names, place, anciens_id, echelle, echelle2, sous_type, latitude, longitude, youtube_embed, youtube_url, spotify_url, soundcloud_url, lyrics, annee, decennie, language"
+)
   .or(`and(${andParts.join(",")})`)
   .limit(12);
 
 // Décennies : filtre direct (AND)
-query = query.in("language", languages)
+if (languages.length) query = query.in("language", languages);
 
 if (decennies.length) query = query.in("decennie", decennies);
 
