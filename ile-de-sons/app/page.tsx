@@ -1,7 +1,6 @@
 import PrimaryButton from "../components/PrimaryButton";
 import ArtistCarousel from "../components/ArtistCarousel";
 import { createClient } from "@supabase/supabase-js";
-import LibraryCard from "../components/LibraryCard";
 
 export default async function HomePage() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -70,8 +69,6 @@ export default async function HomePage() {
 />
 
             <ArtistCarousel />
-
-            <LibraryCard />
 
             <PrimaryButton
               href="/parcours"

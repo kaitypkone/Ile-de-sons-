@@ -2,37 +2,6 @@
 
 import Link from "next/link";
 
-export default function LibraryCard() {
-  return (
-    <div
-      className="
-        w-full rounded-2xl border border-[color:var(--border)]
-        bg-white/70 backdrop-blur px-4 py-4 shadow-sm
-      "
-    >
-      <div className="text-[15px] font-semibold text-[color:var(--ink)]">
-        Bibliothèques
-      </div>
-      <div className="mt-1 text-[13px] leading-5 text-[color:var(--muted)]">
-        Accède aux listes et recherche par noms, styles et périodes.
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <MiniButton
-          href="/bibliotheque"
-          title="Chansons"
-          subtitle="Liste et recherche"
-        />
-        <MiniButton
-          href="/bibliotheque-artistes"
-          title="Artistes"
-          subtitle="Liste et recherche"
-        />
-      </div>
-    </div>
-  );
-}
-
 function MiniButton({
   href,
   title,

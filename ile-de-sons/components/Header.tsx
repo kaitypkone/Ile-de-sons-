@@ -8,7 +8,6 @@ const navItems = [
   { label: "Accueil", href: "/" },
   { label: "Carto", href: "/carte" },
   { label: "Artistes", href: "/artistes" },
-  { label: "Chansons", href: "/chansons" },
 ];
 
 export default function Header() {
