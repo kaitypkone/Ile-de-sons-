@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 
 const navItems = [
   { label: "Accueil", href: "/" },
-  { label: "Carto", href: "/carte" },
+  { label: "Chansons", href: "/carte" },
   { label: "Artistes", href: "/artistes" },
 ];
 
@@ -22,8 +22,8 @@ export default function Header() {
           <Image
             src="/logo.png"
             alt="Logo"
-            width={36}
-            height={36}
+            width={70}
+            height={70}
             priority
           />
         </Link>
