@@ -54,6 +54,29 @@ type ContributionDraft = {
 const POSITRON_STYLE =
   "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
+  // ✅ Style satellite (raster) — sans clé API
+const SATELLITE_STYLE: any = {
+  version: 8,
+  sources: {
+    esri_sat: {
+      type: "raster",
+      tiles: [
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      attribution: "Tiles © Esri",
+    },
+  },
+  layers: [
+    {
+      id: "esri-satellite",
+      type: "raster",
+      source: "esri_sat",
+    },
+  ],
+};
+
+
 // Quelques seuils de zoom (ajustables)
 const Z_IDF_ONLY = 6.8;        // <= : IDF visible (grand dézoom)
 const Z_CONTEXT_START = 6.8;   // > : deps + fleuves + rail visibles
@@ -69,6 +92,12 @@ const pointsGeojsonRef = useRef<GeoJSONFC | null>(null);
  // ✅ index coords arrondies -> chansons à ce point
   const coordIndexRef = useRef<Map<string, SongPoint[]>>(new Map());
 
+  // ✅ garde les geojson en mémoire pour retrouver une feature + bbox
+const idfGeoRef = useRef<GeoJSONFC | null>(null);
+const depsGeoRef = useRef<GeoJSONFC | null>(null);
+const riversGeoRef = useRef<GeoJSONFC | null>(null);
+const railGeoRef = useRef<GeoJSONFC | null>(null);
+
   function coordKey(lng: number, lat: number) {
     return `${lng.toFixed(6)}|${lat.toFixed(6)}`;
   }
@@ -79,6 +108,7 @@ const pointsGeojsonRef = useRef<GeoJSONFC | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetSnap, setSheetSnap] = useState<"collapsed" | "half" | "full">("full");
   const dragRef = useRef<{ startY: number; startSnap: "collapsed" | "half" | "full" } | null>(null);
+const [playerNonce, setPlayerNonce] = useState(0);
 
   const [isLoadingPoints, setIsLoadingPoints] = useState(false);
   const [lastBboxKey, setLastBboxKey] = useState<string>("");
@@ -91,6 +121,8 @@ const [pickToast, setPickToast] = useState<string | null>(null);
 const [placeOffset, setPlaceOffset] = useState<number>(0);
 const [placeHasMore, setPlaceHasMore] = useState<boolean>(false);
 const [placeLoadingMore, setPlaceLoadingMore] = useState<boolean>(false);
+
+const [baseMap, setBaseMap] = useState<"positron" | "satellite">("positron");
 
 const PLACE_PAGE_SIZE = 50;
 
@@ -246,7 +278,7 @@ if (mapRef.current) {
 
     const map = new maplibregl.Map({
   container: mapDivRef.current,
-  style: POSITRON_STYLE,
+  style: baseMap === "positron" ? POSITRON_STYLE : SATELLITE_STYLE,
   center: [2.35, 48.85],  // moitié nord (ajuste si tu veux)
   zoom: 8.3,             // moitié nord visible au chargement
   minZoom: 2.5,          // dézoom très large autorisé
@@ -266,8 +298,10 @@ map.on("error", (e) => {
 
     map.on("load", async () => {
   // 1) Contexte...
-  await addContextLayers(map);
-  setOverlay(map, "none");
+  await addContextLayers(map, { idfGeoRef, depsGeoRef, riversGeoRef, railGeoRef });
+
+// On démarre avec aucune sélection geo
+clearSelectedGeo(map);
 
 // ✅ Clics sur les GeoJSON (idf / deps / fleuves / rail)
 const openGeo = async (kind: "idf" | "dep" | "river" | "rail", id: any, label: string) => {
@@ -416,7 +450,7 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
       map.remove();
       mapRef.current = null;
     };
-  }, [idfBounds]);
+  }, [idfBounds, baseMap]);
 
   // Quand les filtres changent : invalide le cache bbox et refetch immédiatement
   useEffect(() => {
@@ -437,9 +471,9 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
       {/* Carte */}
       <div ref={mapDivRef} className="absolute inset-0 h-full w-full" />
 
-      {/* Overlay haut */}
-      <div className="absolute left-0 right-0 top-0 z-20 px-3 pt-3">
-        <div className="mx-auto w-full max-w-[420px] space-y-2">
+     {/* Overlay haut */}
+<div className="fixed left-0 right-0 top-14 z-40 px-3 pt-3 pointer-events-none">
+  <div className="mx-auto w-full max-w-[420px] space-y-2 pointer-events-auto">
           
 {pickOnMap ? (
   <div className="absolute left-0 right-0 bottom-4 z-50 px-3">
@@ -470,49 +504,83 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
 
 
           {/* Toggle Chanson / Lieu */}
-{/* Barre principale : Filtrer / Rechercher */}
-<div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
-  <div className="flex">
-    <button
-      className={[
-        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
-        topMode === "filter"
-          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
-          : "text-[color:var(--muted)]",
-      ].join(" ")}
-      onClick={() => toggleTopMode("filter")}
-    >
-      Filtrer
-    </button>
+{/* Barre principale + switch fond de carte (même ligne, pas de chevauchement) */}
+<div className="flex items-center gap-2">
+  {/* Barre Filtrer / Rechercher / Contribuer — volontairement plus courte */}
+  <div className="flex-1 max-w-[320px] rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-2 py-1 shadow-sm">
+    <div className="flex">
+      <button
+        className={[
+          "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+          topMode === "filter"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => toggleTopMode("filter")}
+      >
+        Filtrer
+      </button>
 
-    <button
-      className={[
-        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
-        topMode === "search"
-          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
-          : "text-[color:var(--muted)]",
-      ].join(" ")}
-      onClick={() => toggleTopMode("search")}
-    >
-      Rechercher
-    </button>
+      <button
+        className={[
+          "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+          topMode === "search"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => toggleTopMode("search")}
+      >
+        Rechercher
+      </button>
 
-    <button
-      className={[
-        "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
-        topMode === "contribute"
-          ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
-          : "text-[color:var(--muted)]",
-      ].join(" ")}
-      onClick={() => {
-        setTopMode("contribute");
-        setSheetOpen(true);
-        setSheetSnap("full");
-        setContributionOpen(true);
-      }}
-    >
-      Contribuer
-    </button>
+      <button
+        className={[
+          "flex-1 px-3 py-2 text-[13px] font-semibold rounded-xl",
+          topMode === "contribute"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => {
+          setTopMode("contribute");
+          setSheetOpen(true);
+          setSheetSnap("full");
+          setContributionOpen(true);
+        }}
+      >
+        Contribuer
+      </button>
+    </div>
+  </div>
+
+  {/* Switch Plan / Satellite — discret, à droite */}
+  <div className="shrink-0">
+    <div className="inline-flex items-center rounded-full border border-[color:var(--border)] bg-white/70 backdrop-blur px-1 py-1 shadow-sm">
+      <button
+        className={[
+          "px-2.5 py-1 text-[11px] font-semibold rounded-full transition",
+          baseMap === "positron"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => setBaseMap("positron")}
+        title="Fond plan"
+      >
+        Plan
+      </button>
+
+      <button
+        className={[
+          "px-2.5 py-1 text-[11px] font-semibold rounded-full transition",
+          baseMap === "satellite"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => setBaseMap("satellite")}
+        title="Fond satellite"
+      >
+        Sat
+      </button>
+    </div>
   </div>
 </div>
 
@@ -534,11 +602,15 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
       ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
       : "text-[color:var(--muted)]",
   ].join(" ")}
-  onClick={() => {
-    setPlaceMode("song");
-    const map = mapRef.current;
-    if (map) setOverlay(map, "none"); // ✅ on cache les geojson
-  }}
+ onClick={() => {
+  setPlaceMode("song");
+  const map = mapRef.current;
+  if (map) {
+    clearSelectedPoint(map);
+    clearSelectedGeo(map);
+  }
+}}
+
 >
   Chanson
 </button>
@@ -566,6 +638,7 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
         onSelect={(song) => {
           const map = mapRef.current;
           if (!map) return;
+          clearSelectedGeo(map);
 
           setSelectedSong(song as any);
           setSelectedPlace(song.place ?? "");
@@ -573,15 +646,36 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
           setSheetOpen(true);
           setSheetSnap("full");
 
-          if (typeof song.longitude === "number" && typeof song.latitude === "number") {
-            const targetZoom = Math.max(map.getZoom(), 13);
-            map.easeTo({
-              center: [song.longitude, song.latitude],
-              zoom: targetZoom,
-              duration: 650,
-            });
-            setSelectedPoint(map, song.longitude, song.latitude, song);
-          }
+          const hasPoint = typeof song.longitude === "number" && typeof song.latitude === "number";
+
+if (hasPoint) {
+  const targetZoom = Math.max(map.getZoom(), 13);
+  map.easeTo({
+    center: [song.longitude as number, song.latitude as number],
+    zoom: targetZoom,
+    duration: 650,
+  });
+  setSelectedPoint(map, song.longitude as number, song.latitude as number, song);
+} else {
+  // ✅ cas fleuve / dep / région / rail : on affiche uniquement l'entité
+  const kind = kindFromRow(song.echelle ?? null, song.echelle2 ?? null, song.sous_type ?? null);
+  if (kind && song.anciens_id) {
+    showSelectedGeo({
+      map,
+      kind,
+      anciensId: song.anciens_id,
+      idfGeo: idfGeoRef.current,
+      depsGeo: depsGeoRef.current,
+      riversGeo: riversGeoRef.current,
+      railGeo: railGeoRef.current,
+    });
+  } else {
+    // rien à afficher : on clear juste
+    clearSelectedPoint(map);
+    clearSelectedGeo(map);
+  }
+}
+
         }}
       />
     ) : (
@@ -599,52 +693,79 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
                 return;
               }
 
-              navigator.geolocation.getCurrentPosition(
-                async (pos) => {
-                  const lat = pos.coords.latitude;
-                  const lng = pos.coords.longitude;
+              const success = async (pos: GeolocationPosition) => {
+  const lat = pos.coords.latitude;
+  const lng = pos.coords.longitude;
 
-                  const res = await fetch("/api/songs-nearby", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      lat,
-                      lng,
-                      radiusKm: 20,
-                      limit: 100,
-                      filters,
-                    }),
-                  });
+  const res = await fetch("/api/songs-nearby", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lat,
+      lng,
+      radiusKm: 20,
+      limit: 100,
+      filters,
+    }),
+  });
 
-                  if (!res.ok) return;
-                  const json = await res.json();
+  if (!res.ok) return;
+  const json = await res.json();
 
-                  setSelectedPlaceLabel("Autour de moi (20 km)");
-                  setPlaceSongs(json.songs ?? []);
-                  setPlaceTotal((json.songs ?? []).length);
-                  setPlaceOffset((json.songs ?? []).length);
-                  setPlaceHasMore(false);
-                  setSelectedSong(null);
+  setSelectedPlaceLabel("Autour de moi (20 km)");
+  setPlaceSongs(json.songs ?? []);
+  setPlaceTotal((json.songs ?? []).length);
+  setPlaceOffset((json.songs ?? []).length);
+  setPlaceHasMore(false);
+  setSelectedSong(null);
 
-                  setTab("liste");
-                  setSheetOpen(true);
-                  setSheetSnap("full");
+  setTab("liste");
+  setSheetOpen(true);
+  setSheetSnap("full");
 
-                  const map = mapRef.current;
-                  if (map) {
-                    map.easeTo({
-                      center: [lng, lat],
-                      zoom: Math.max(map.getZoom(), 12),
-                      duration: 650,
-                    });
-                  }
-                },
-                (err) => {
-                  alert("Impossible d’obtenir la position.");
-                  console.error(err);
-                },
-                { enableHighAccuracy: true, timeout: 8000 }
-              );
+  const map = mapRef.current;
+  if (map) {
+    map.easeTo({
+      center: [lng, lat],
+      zoom: Math.max(map.getZoom(), 12),
+      duration: 650,
+    });
+  }
+};
+
+const fail = (err: GeolocationPositionError) => {
+  console.error("Geolocation error:", err.code, err.message);
+
+  // ✅ Si high accuracy échoue (timeout/position indispo), on retente en mode plus permissif (iPhone-friendly)
+  const shouldRetry =
+    err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE;
+
+  if (shouldRetry) {
+    navigator.geolocation.getCurrentPosition(
+      success,
+      (err2) => {
+        console.error("Geolocation retry error:", err2.code, err2.message);
+        alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 20000,
+        maximumAge: 60000,
+      }
+    );
+    return;
+  }
+
+  // Permission refusée ou autre
+  alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
+};
+
+navigator.geolocation.getCurrentPosition(success, fail, {
+  enableHighAccuracy: true,
+  timeout: 20000,     // ✅ iOS a souvent besoin de plus
+  maximumAge: 60000,  // ✅ accepte une position récente (très utile sur iOS)
+});
+
             }}
           >
             Autour de moi
@@ -659,10 +780,8 @@ map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
               if (!map) return;
 
               setSelectedPlaceLabel(p.place);
-
-const ov = overlayFromPlace(p);
-setOverlay(map, ov);
-
+clearSelectedPoint(map);
+clearSelectedGeo(map);
 
               const res = await fetch("/api/songs-by-place", {
                 method: "POST",
@@ -689,6 +808,22 @@ setOverlay(map, ov);
               setSheetOpen(true);
               setSheetSnap("full");
 
+// ✅ Si le lieu correspond à une entité geo, on n'affiche que CETTE entité
+const kind = kindFromRow(p.echelle ?? null, p.echelle2 ?? null, p.sous_type ?? null);
+if (kind && p.anciens_id) {
+  showSelectedGeo({
+    map,
+    kind,
+    anciensId: p.anciens_id,
+    idfGeo: idfGeoRef.current,
+    depsGeo: depsGeoRef.current,
+    riversGeo: riversGeoRef.current,
+    railGeo: railGeoRef.current,
+  });
+  return; // ✅ on évite d'utiliser json.center (on a déjà fitBounds sur l'entité)
+}
+
+
               if (json.center && Array.isArray(json.center)) {
                 map.easeTo({
                   center: json.center,
@@ -714,10 +849,13 @@ setOverlay(map, ov);
   snap={sheetSnap}
   onSnap={setSheetSnap}
   onClose={() => {
-    setSheetOpen(false);
-    setContributionOpen(false);
-    setPickOnMap(false);
-  }}
+  // ✅ stoppe les iframes (YouTube/Spotify/SoundCloud) uniquement quand on ferme totalement
+  setPlayerNonce((n) => n + 1);
+
+  setSheetOpen(false);
+  setContributionOpen(false);
+  setPickOnMap(false);
+}}
   title={
     contributionOpen
       ? "Contribuer"
@@ -839,13 +977,15 @@ setOverlay(map, ov);
               </div>
 
               <MediaBlock
-                song={{
-                  youtube_embed: selectedSong.youtube_embed,
-                  youtube_url: selectedSong.youtube_url,
-                  spotify_url: selectedSong.spotify_url,
-                  soundcloud_url: selectedSong.soundcloud_url,
-                }}
-              />
+  key={playerNonce}
+  song={{
+    youtube_embed: selectedSong.youtube_embed,
+    youtube_url: selectedSong.youtube_url,
+    spotify_url: selectedSong.spotify_url,
+    soundcloud_url: selectedSong.soundcloud_url,
+  }}
+/>
+
             </>
           ) : (
             <div className="p-3 text-[13px] text-[color:var(--muted)]">
@@ -1102,40 +1242,40 @@ coordIndexRef.current = idx;
   }
 }
 
-async function addContextLayers(map: MLMap) {
-  // Région IDF (quand on dézoome très loin)
-  const idf = await fetch("/data/IDF.geojson").then((r) => r.json());
+async function addContextLayers(
+  map: MLMap,
+  refs: {
+    idfGeoRef: React.MutableRefObject<GeoJSONFC | null>;
+    depsGeoRef: React.MutableRefObject<GeoJSONFC | null>;
+    riversGeoRef: React.MutableRefObject<GeoJSONFC | null>;
+    railGeoRef: React.MutableRefObject<GeoJSONFC | null>;
+  }
+) {
+  // Région IDF
+  const idf = (await fetch("/data/IDF.geojson").then((r) => r.json())) as GeoJSONFC;
+  refs.idfGeoRef.current = idf;
 
-  map.addSource("idf-region", {
-    type: "geojson",
-    data: idf,
-  });
+  map.addSource("idf-region", { type: "geojson", data: idf });
 
   map.addLayer({
     id: "idf-fill",
     type: "fill",
     source: "idf-region",
-    layout: { visibility: "none" },   // ✅ caché par défaut
-    paint: {
-      "fill-color": "#f1b56a", // orangé doux
-      "fill-opacity": 0.35,
-    },
+    layout: { visibility: "none" },
+    paint: { "fill-color": "#f1b56a", "fill-opacity": 0.35 },
   });
 
   map.addLayer({
     id: "idf-outline",
     type: "line",
     source: "idf-region",
-    layout: { visibility: "none" },   // ✅ caché par défaut
-    paint: {
-      "line-color": "#c9853f",
-      "line-width": 2,
-      "line-opacity": 0.9,
-    },
+    layout: { visibility: "none" },
+    paint: { "line-color": "#c9853f", "line-width": 2, "line-opacity": 0.9 },
   });
 
-  // Départements (visibles quand on voit IDF, cachés quand zoom fort)
-  const deps = await fetch("/data/dep_WGS84.geojson").then((r) => r.json());
+  // Départements
+  const deps = (await fetch("/data/dep_WGS84.geojson").then((r) => r.json())) as GeoJSONFC;
+  refs.depsGeoRef.current = deps;
 
   map.addSource("idf-deps", { type: "geojson", data: deps });
 
@@ -1143,57 +1283,132 @@ async function addContextLayers(map: MLMap) {
     id: "deps-fill",
     type: "fill",
     source: "idf-deps",
-    layout: { visibility: "none" },   // ✅ caché par défaut
-    paint: {
-      "fill-color": "#f1a65f",
-      "fill-opacity": 0.6, // demandé : 60% transparent
-    },
+    layout: { visibility: "none" },
+    paint: { "fill-color": "#f1a65f", "fill-opacity": 0.6 },
   });
 
   map.addLayer({
     id: "deps-outline",
     type: "line",
     source: "idf-deps",
-    layout: { visibility: "none" },   // ✅ caché par défaut
-    paint: {
-      "line-color": "#d8893f",
-      "line-width": 1.5,
-      "line-opacity": 0.9,
-    },
+    layout: { visibility: "none" },
+    paint: { "line-color": "#d8893f", "line-width": 1.5, "line-opacity": 0.9 },
   });
 
-  // Fleuves (bleu, sans transparence)
-  const rivers = await fetch("/data/fleuves_WGS84.geojson").then((r) => r.json());
+  // Fleuves
+  const rivers = (await fetch("/data/fleuves_WGS84.geojson").then((r) => r.json())) as GeoJSONFC;
+  refs.riversGeoRef.current = rivers;
+
   map.addSource("idf-rivers", { type: "geojson", data: rivers });
 
   map.addLayer({
     id: "rivers-line",
     type: "line",
     source: "idf-rivers",
-    layout: { visibility: "none" },   // ✅ caché par défaut
-    paint: {
-      "line-color": "#2a78ff",
-      "line-width": 2.5,
-      "line-opacity": 1,
-    },
+    layout: { visibility: "none" },
+    paint: { "line-color": "#2a78ff", "line-width": 2.5, "line-opacity": 1 },
   });
 
-  // Réseau ferré (gris/marron, sans transparence)
-  const rail = await fetch("/data/reseau_ferre_IDF.geojson").then((r) => r.json());
+  // Rail
+  const rail = (await fetch("/data/reseau_ferre_IDF.geojson").then((r) => r.json())) as GeoJSONFC;
+  refs.railGeoRef.current = rail;
+
   map.addSource("idf-rail", { type: "geojson", data: rail });
 
   map.addLayer({
     id: "rail-line",
     type: "line",
     source: "idf-rail",
-    layout: { visibility: "none" },   // ✅ caché par défaut
+    layout: { visibility: "none" },
+    paint: { "line-color": "#6b5b4a", "line-width": 2, "line-opacity": 1 },
+  });
+
+  // =========================
+  // ✅ Layers de sélection (1 seule entité)
+  // =========================
+
+// IDF selected (ORANGE 65%)
+  map.addLayer({
+    id: "idf-selected-fill",
+    type: "fill",
+    source: "idf-region",
+    layout: { visibility: "none" },
+    filter: ["==", ["get", "ID"], "__none__"],
     paint: {
-      "line-color": "#6b5b4a",
+      "fill-color": "#f1a65f",
+      "fill-opacity": 0.65,
+    },
+  });
+
+  map.addLayer({
+    id: "idf-selected-outline",
+    type: "line",
+    source: "idf-region",
+    layout: { visibility: "none" },
+    filter: ["==", ["get", "ID"], "__none__"],
+    paint: {
+      "line-color": "#d8893f",
       "line-width": 2,
       "line-opacity": 1,
     },
   });
+
+  // Départements selected (ORANGE 65%)
+  map.addLayer({
+    id: "dep-selected-fill",
+    type: "fill",
+    source: "idf-deps",
+    layout: { visibility: "none" },
+    filter: ["==", ["get", "ID"], "__none__"],
+    paint: {
+      "fill-color": "#f1a65f",
+      "fill-opacity": 0.65,
+    },
+  });
+
+  map.addLayer({
+    id: "dep-selected-outline",
+    type: "line",
+    source: "idf-deps",
+    layout: { visibility: "none" },
+    filter: ["==", ["get", "ID"], "__none__"],
+    paint: {
+      "line-color": "#d8893f",
+      "line-width": 2,
+      "line-opacity": 1,
+    },
+  });
+
+  // Fleuves selected (BLEU, opaque)
+  map.addLayer({
+    id: "river-selected-line",
+    type: "line",
+    source: "idf-rivers",
+    layout: { visibility: "none" },
+    filter: ["==", ["get", "ID"], "__none__"],
+    paint: {
+      "line-color": "#2a78ff",
+      "line-width": 4,
+      "line-opacity": 1,
+    },
+  });
+
+  // Rail selected (GRIS clair, opaque)
+  map.addLayer({
+    id: "rail-selected-line",
+    type: "line",
+    source: "idf-rail",
+    layout: { visibility: "none" },
+    filter: ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"],
+    paint: {
+      "line-color": "#7a7a7a",
+      "line-width": 4,
+      "line-opacity": 1,
+    },
+  });
 }
+
+
 
 function addSongPointLayers(map: MLMap) {
   map.addSource("songs", {
@@ -1971,16 +2186,16 @@ function BottomSheet({
 }) {
   // Positions en % : plus c’est grand, plus la sheet est “bas” (moins visible)
   const snapClass =
-    snap === "collapsed"
-      ? "translate-y-[92%]"
-      : snap === "half"
-      ? "translate-y-[40%]"
-      : "translate-y-0";
+  snap === "collapsed"
+    ? "translate-y-[78%]"
+    : snap === "half"
+    ? "translate-y-[40%]"
+    : "translate-y-0";
 
   return (
     <div
       className={[
-        "absolute left-0 right-0 bottom-0 z-30 transition-transform duration-200",
+        "fixed left-0 right-0 bottom-0 z-50 transition-transform duration-200",
         open ? `${snapClass} pointer-events-auto` : "translate-y-[100%] pointer-events-none",
       ].join(" ")}
       // Empêche le scroll de la page derrière
@@ -2174,6 +2389,143 @@ function pickLabel(props: any, fallback: string) {
     fallback
   );
 }
+
+function clearSelectedPoint(map: MLMap) {
+  const src = map.getSource("selected-point") as maplibregl.GeoJSONSource | undefined;
+  if (!src) return;
+  src.setData({ type: "FeatureCollection", features: [] });
+}
+
+function clearSelectedGeo(map: MLMap) {
+  // Cache tous les layers selected
+  setVis(map, "idf-selected-fill", false);
+  setVis(map, "idf-selected-outline", false);
+  setVis(map, "dep-selected-fill", false);
+  setVis(map, "dep-selected-outline", false);
+  setVis(map, "river-selected-line", false);
+  setVis(map, "rail-selected-line", false);
+
+  // Reset filtres (valeurs impossibles)
+  if (map.getLayer("idf-selected-fill")) map.setFilter("idf-selected-fill", ["==", ["get", "ID"], "__none__"]);
+  if (map.getLayer("idf-selected-outline")) map.setFilter("idf-selected-outline", ["==", ["get", "ID"], "__none__"]);
+  if (map.getLayer("dep-selected-fill")) map.setFilter("dep-selected-fill", ["==", ["get", "ID"], "__none__"]);
+  if (map.getLayer("dep-selected-outline")) map.setFilter("dep-selected-outline", ["==", ["get", "ID"], "__none__"]);
+  if (map.getLayer("river-selected-line")) map.setFilter("river-selected-line", ["==", ["get", "ID"], "__none__"]);
+  if (map.getLayer("rail-selected-line"))
+  map.setFilter("rail-selected-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+
+}
+
+function kindFromRow(echelle: string | null, echelle2: string | null, sous_type: string | null): "idf" | "dep" | "river" | "rail" | null {
+  if (echelle2 === "Département") return "dep";
+  if (echelle === "Région" && sous_type === "Fleuves") return "river";
+  if (echelle === "Région" && sous_type === "Lignes de trains - métros") return "rail";
+  if (echelle === "Région" && (!sous_type || sous_type.trim() === "")) return "idf";
+  return null;
+}
+
+function findFeatureById(fc: GeoJSONFC | null, field: string, idValue: string | number) {
+  if (!fc?.features?.length) return null;
+  for (const f of fc.features as any[]) {
+    const v = f?.properties?.[field];
+    if (v == null) continue;
+    // compare souple (string/number)
+    if (String(v) === String(idValue)) return f as GeoJSONFeature;
+  }
+  return null;
+}
+
+function bboxFromGeometry(geom: GeoJSON.Geometry): [number, number, number, number] | null {
+  // [minX, minY, maxX, maxY]
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+  const walk = (coords: any) => {
+    if (!coords) return;
+    if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+      const x = coords[0], y = coords[1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      return;
+    }
+    for (const c of coords) walk(c);
+  };
+
+  // @ts-ignore
+  walk(geom.coordinates);
+
+  if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) return null;
+  return [minX, minY, maxX, maxY];
+}
+
+function showSelectedGeo(opts: {
+  map: MLMap;
+  kind: "idf" | "dep" | "river" | "rail";
+  anciensId: string;
+  idfGeo: GeoJSONFC | null;
+  depsGeo: GeoJSONFC | null;
+  riversGeo: GeoJSONFC | null;
+  railGeo: GeoJSONFC | null;
+}) {
+  const { map, kind, anciensId, idfGeo, depsGeo, riversGeo, railGeo } = opts;
+
+  clearSelectedPoint(map);
+  clearSelectedGeo(map);
+
+  // Détermine le champ ID côté geojson
+  const field = kind === "rail" ? "OBJECTID_1" : "ID";
+  const idValue: string | number = kind === "rail" ? Number(anciensId) : anciensId;
+
+  // Applique filtre + visibilité sur le bon layer selected
+  if (kind === "idf") {
+    setVis(map, "idf-selected-fill", true);
+    setVis(map, "idf-selected-outline", true);
+    map.setFilter("idf-selected-fill", ["==", ["get", "ID"], idValue]);
+    map.setFilter("idf-selected-outline", ["==", ["get", "ID"], idValue]);
+  } else if (kind === "dep") {
+    setVis(map, "dep-selected-fill", true);
+    setVis(map, "dep-selected-outline", true);
+    map.setFilter("dep-selected-fill", ["==", ["get", "ID"], idValue]);
+    map.setFilter("dep-selected-outline", ["==", ["get", "ID"], idValue]);
+  } else if (kind === "river") {
+    setVis(map, "river-selected-line", true);
+    map.setFilter("river-selected-line", ["==", ["get", "ID"], idValue]);
+  } else if (kind === "rail") {
+    setVis(map, "rail-selected-line", true);
+    map.setFilter("rail-selected-line", [
+  "==",
+  ["to-string", ["get", "OBJECTID_1"]],
+  String(anciensId),
+]);
+
+
+  }
+
+  // Bbox + fitBounds (pour centrer/zoomer sur l'entité)
+  const fc =
+    kind === "idf" ? idfGeo :
+    kind === "dep" ? depsGeo :
+    kind === "river" ? riversGeo :
+    railGeo;
+
+  const feat = findFeatureById(fc, field, idValue);
+  const bbox = feat?.geometry ? bboxFromGeometry(feat.geometry) : null;
+
+  if (bbox) {
+    const bounds: LngLatBoundsLike = [
+      [bbox[0], bbox[1]],
+      [bbox[2], bbox[3]],
+    ];
+    map.fitBounds(bounds, {
+      padding: 50,
+      duration: 650,
+      maxZoom: kind === "river" || kind === "rail" ? 12.5 : 11.8,
+    });
+  }
+}
+
+
 
 function setOverlay(map: MLMap, overlay: Overlay) {
   // tout cacher

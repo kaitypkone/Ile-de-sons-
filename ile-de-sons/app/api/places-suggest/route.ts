@@ -16,6 +16,7 @@ type Suggest = {
   echelle: string | null;
   echelle2: string | null;
   sous_type: string | null;
+  anciens_id: string | null;  // ✅ AJOUT
   count: number;
 };
 
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
   // 1) Suggestions rapides (échantillon)
   let base = supabase
     .from("chansons")
-    .select("place,echelle,echelle2,sous_type")
+    .select("place,echelle,echelle2,sous_type,anciens_id")
     .ilike("place", `%${qq}%`)
     .limit(600);
 
@@ -83,7 +84,7 @@ export async function POST(req: Request) {
     const place = row.place ?? "";
     if (!place) continue;
 
-    const key = `${place}||${row.echelle ?? ""}||${row.echelle2 ?? ""}||${row.sous_type ?? ""}`;
+    const key = `${place}||${row.echelle ?? ""}||${row.echelle2 ?? ""}||${row.sous_type ?? ""}||${row.anciens_id ?? ""}`;
     const cur = map.get(key);
     if (cur) cur.count += 1;
     else {
@@ -92,6 +93,7 @@ export async function POST(req: Request) {
         echelle: row.echelle ?? null,
         echelle2: row.echelle2 ?? null,
         sous_type: row.sous_type ?? null,
+        anciens_id: row.anciens_id ?? null, // ✅ AJOUT
         count: 1, // provisoire (sera remplacé par le count exact)
       });
     }
@@ -109,6 +111,8 @@ export async function POST(req: Request) {
         .from("chansons")
         .select("id", { count: "exact", head: true })
         .eq("place", s.place);
+        if (s.anciens_id !== null) cq = cq.eq("anciens_id", s.anciens_id);
+
 
       // IMPORTANT : même filtres globaux
       cq = applyCommonFilters(cq, filters);

@@ -7,8 +7,10 @@ export type PlaceSearchResult = {
   echelle: string | null;
   echelle2: string | null;
   sous_type: string | null;
+  anciens_id: string | null;   // ✅ AJOUT
   count: number;
 };
+
 
 type Filters = {
   artists: string[];   // ex: ["Rue","Commune","Département","Région"]
