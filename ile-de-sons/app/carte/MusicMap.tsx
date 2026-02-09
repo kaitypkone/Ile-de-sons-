@@ -2604,14 +2604,9 @@ function showAvailableGeo(map: MLMap, payload: {
     map.setFilter("deps-fill", ["==", ["get", "ID"], "__none__"]);
     map.setFilter("deps-outline", ["==", ["get", "ID"], "__none__"]);
   }
-
- // Fleuves (ID) — line + hitbox
+// Fleuves (ID) — line + hit
 if (payload.riverIds.length) {
-  const filter = [
-    "in",
-    ["to-string", ["get", "ID"]],
-    ["literal", payload.riverIds.map(String)],
-  ] as any;
+  const filter = ["in", ["to-string", ["get", "ID"]], ["literal", payload.riverIds.map(String)]] as any;
 
   setVis(map, "rivers-line", true);
   setVis(map, "rivers-hit", true);
@@ -2626,13 +2621,9 @@ if (payload.riverIds.length) {
   map.setFilter("rivers-hit", ["==", ["get", "ID"], "__none__"]);
 }
 
-// Rail (OBJECTID_1) — line + hitbox
+// Rail (OBJECTID_1) — line + hit
 if (payload.railIds.length) {
-  const filter = [
-    "in",
-    ["to-string", ["get", "OBJECTID_1"]],
-    ["literal", payload.railIds.map(String)],
-  ] as any;
+  const filter = ["in", ["to-string", ["get", "OBJECTID_1"]], ["literal", payload.railIds.map(String)]] as any;
 
   setVis(map, "rail-line", true);
   setVis(map, "rail-hit", true);
@@ -2646,6 +2637,7 @@ if (payload.railIds.length) {
   map.setFilter("rail-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
   map.setFilter("rail-hit", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
 }
+
 
 
 
@@ -2759,27 +2751,40 @@ if (map.getLayer("rail-hit")) map.setFilter("rail-hit", ["==", ["to-string", ["g
     map.setFilter("deps-outline", ["==", ["get", "ID"], "__none__"]);
   }
 
-  // Fleuves (ID)
-  if (payload.river.length) {
-    setVis(map, "rivers-line", true);
-    map.setFilter("rivers-line", ["in", ["to-string", ["get", "ID"]], ["literal", payload.river.map(String)]]);
-  } else {
-    setVis(map, "rivers-line", false);
-    map.setFilter("rivers-line", ["==", ["get", "ID"], "__none__"]);
-  }
+ // Fleuves (ID) — line + hit
+if (payload.river.length) {
+  const filter = ["in", ["to-string", ["get", "ID"]], ["literal", payload.river.map(String)]] as any;
 
-  // Rail (OBJECTID_1)
-  if (payload.rail.length) {
-    setVis(map, "rail-line", true);
-    map.setFilter("rail-line", [
-      "in",
-      ["to-string", ["get", "OBJECTID_1"]],
-      ["literal", payload.rail.map(String)],
-    ]);
-  } else {
-    setVis(map, "rail-line", false);
-    map.setFilter("rail-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
-  }
+  setVis(map, "rivers-line", true);
+  setVis(map, "rivers-hit", true);
+
+  map.setFilter("rivers-line", filter);
+  map.setFilter("rivers-hit", filter);
+} else {
+  setVis(map, "rivers-line", false);
+  setVis(map, "rivers-hit", false);
+
+  map.setFilter("rivers-line", ["==", ["get", "ID"], "__none__"]);
+  map.setFilter("rivers-hit", ["==", ["get", "ID"], "__none__"]);
+}
+
+// Rail (OBJECTID_1) — line + hit
+if (payload.rail.length) {
+  const filter = ["in", ["to-string", ["get", "OBJECTID_1"]], ["literal", payload.rail.map(String)]] as any;
+
+  setVis(map, "rail-line", true);
+  setVis(map, "rail-hit", true);
+
+  map.setFilter("rail-line", filter);
+  map.setFilter("rail-hit", filter);
+} else {
+  setVis(map, "rail-line", false);
+  setVis(map, "rail-hit", false);
+
+  map.setFilter("rail-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+  map.setFilter("rail-hit", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+}
+
 }
 
 
