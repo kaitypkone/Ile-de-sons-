@@ -342,110 +342,88 @@ const openGeo = async (kind: "idf" | "dep" | "river" | "rail", id: any, label: s
   setSheetSnap("full");
 };
 
-// IDF (polygone)
-map.on("click", "idf-fill", (e) => {
-  // ✅ Priorité : points > (fleuves/rail) > dep > idf
-const hasPoint = map.queryRenderedFeatures(e.point, { layers: ["unclustered", "clusters"] }).length > 0;
-if (hasPoint) return;
+map.on("click", (e) => {
+  const p = e.point;
 
-const hasRiverOrRail = map.queryRenderedFeatures(e.point, { layers: ["rivers-line", "rail-line"] }).length > 0;
-if (hasRiverOrRail) return;
+  // 1️⃣ PRIORITÉ ABSOLUE : points
+  const pointHits = map.queryRenderedFeatures(p, {
+    layers: ["unclustered", "clusters"],
+  });
+  if (pointHits.length) return;
 
-const hasDep = map.queryRenderedFeatures(e.point, { layers: ["deps-fill"] }).length > 0;
-if (hasDep) return;
+  // 2️⃣ Fleuves
+  const riverHits = map.queryRenderedFeatures(p, {
+    layers: ["rivers-hit"],
+  });
+  if (riverHits.length) {
+    const f = riverHits[0];
+    const id = f.properties?.ID;
+    if (id != null) {
+      openGeo(
+        "river",
+        id,
+        f.properties?.NOM_C_EAU ?? f.properties?.name ?? "Fleuve"
+      );
+    }
+    return;
+  }
 
-(e.originalEvent as any).cancelBubble = true;
+  // 3️⃣ Rail
+  const railHits = map.queryRenderedFeatures(p, {
+    layers: ["rail-hit"],
+  });
+  if (railHits.length) {
+    const f = railHits[0];
+    const id = f.properties?.OBJECTID_1;
+    if (id != null) {
+      openGeo("rail", id, f.properties?.res_com ?? "Réseau ferré");
+    }
+    return;
+  }
 
-  const feats = map.queryRenderedFeatures(e.point, { layers: ["idf-fill"] }) as any[];
-  const f = feats?.[0];
-  if (!f) return;
+  // 4️⃣ Département
+  const depHits = map.queryRenderedFeatures(p, {
+    layers: ["deps-fill"],
+  });
+  if (depHits.length) {
+    const f = depHits[0];
+    const id = f.properties?.ID;
+    if (id != null) {
+      openGeo(
+        "dep",
+        id,
+        f.properties?.NOM ?? f.properties?.name ?? "Département"
+      );
+    }
+    return;
+  }
 
-  const id = f.properties?.ID; // ✅ IDF.geojson -> "ID"
-  if (id == null) return;
-
-  openGeo("idf", id, "Île-de-France");
+  // 5️⃣ IDF (dernier)
+  const idfHits = map.queryRenderedFeatures(p, {
+    layers: ["idf-fill"],
+  });
+  if (idfHits.length) {
+    const f = idfHits[0];
+    const id = f.properties?.ID;
+    if (id != null) {
+      openGeo("idf", id, "Île-de-France");
+    }
+  }
 });
 
-// Départements (polygones)
-map.on("click", "deps-fill", (e) => {
-  // ✅ Priorité : points > (fleuves/rail) > dep
-const hasPoint = map.queryRenderedFeatures(e.point, { layers: ["unclustered", "clusters"] }).length > 0;
-if (hasPoint) return;
 
-const hasRiverOrRail = map.queryRenderedFeatures(e.point, { layers: ["rivers-line", "rail-line"] }).length > 0;
-if (hasRiverOrRail) return;
 
-(e.originalEvent as any).cancelBubble = true;
-
-  const feats = map.queryRenderedFeatures(e.point, { layers: ["deps-fill"] }) as any[];
-  const f = feats?.[0];
-  if (!f) return;
-
-  const id = f.properties?.ID; // ✅ dep_WGS84.geojson -> "ID"
-  if (id == null) return;
-
-  const label =
-    f.properties?.NOM ??
-    f.properties?.Nom ??
-    f.properties?.name ??
-    `Département ${id}`;
-
-  openGeo("dep", id, String(label));
-});
-
-// Fleuves (lignes)
-map.on("click", "rivers-hit", (e) => {
-  // ✅ Si un point/cluster est cliquable ici, on ne traite pas le fleuve
-const hasPoint = map.queryRenderedFeatures(e.point, { layers: ["unclustered", "clusters"] }).length > 0;
-if (hasPoint) return;
-
-// ✅ Stoppe les couches moins prioritaires (dep/idf)
-(e.originalEvent as any).cancelBubble = true;
-
-  const feats = map.queryRenderedFeatures(e.point, { layers: ["rivers-line"] }) as any[];
-  const f = feats?.[0];
-  if (!f) return;
-
-  const id = f.properties?.ID; // ✅ fleuves_WGS84.geojson -> "ID"
-  if (id == null) return;
-
-  const label =
-    f.properties?.NOM_C_EAU ??
-    f.properties?.Nom ??
-    f.properties?.name ??
-    `Fleuve ${id}`;
-
-  openGeo("river", id, String(label));
-});
-
-// Rail (lignes)
-map.on("click", "rail-line", (e) => {
-  const hasPoint = map.queryRenderedFeatures(e.point, { layers: ["unclustered", "clusters"] }).length > 0;
-if (hasPoint) return;
-
-(e.originalEvent as any).cancelBubble = true;
-
-  const feats = map.queryRenderedFeatures(e.point, { layers: ["rail-line"] }) as any[];
-  const f = feats?.[0];
-  if (!f) return;
-
-  const id = f.properties?.OBJECTID_1; // ✅ reseau_ferre_IDF.geojson -> "OBJECTID_1"
-  if (id == null) return;
-
-  const label =
-    f.properties?.res_com;
-  openGeo("rail", id, label);
-});
 
 // Cursors “cliquable”
 map.on("mouseenter", "idf-fill", () => (map.getCanvas().style.cursor = "pointer"));
 map.on("mouseleave", "idf-fill", () => (map.getCanvas().style.cursor = ""));
 map.on("mouseenter", "deps-fill", () => (map.getCanvas().style.cursor = "pointer"));
 map.on("mouseleave", "deps-fill", () => (map.getCanvas().style.cursor = ""));
-map.on("mouseenter", "rivers-line", () => (map.getCanvas().style.cursor = "pointer"));
-map.on("mouseleave", "rivers-line", () => (map.getCanvas().style.cursor = ""));
-map.on("mouseenter", "rail-line", () => (map.getCanvas().style.cursor = "pointer"));
-map.on("mouseleave", "rail-line", () => (map.getCanvas().style.cursor = ""));
+map.on("mouseenter", "rivers-hit", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "rivers-hit", () => (map.getCanvas().style.cursor = ""));
+map.on("mouseenter", "rail-hit", () => (map.getCanvas().style.cursor = "pointer"));
+map.on("mouseleave", "rail-hit", () => (map.getCanvas().style.cursor = ""));
+
 
   // 2) Source...
   addSongPointLayers(map);
@@ -1410,7 +1388,8 @@ map.addLayer({
   paint: {
     "line-color": "#000000",
     "line-width": 16,     // zone de clic confortable
-    "line-opacity": 0,    // totalement invisible
+    "line-opacity": 0.001,
+    // totalement invisible
   },
 });
 
@@ -1428,6 +1407,20 @@ map.addLayer({
     layout: { visibility: "none" },
     paint: { "line-color": "#6b5b4a", "line-width": 2, "line-opacity": 1 },
   });
+
+    // Rail hitbox (large, invisible) — pour faciliter le clic
+  map.addLayer({
+    id: "rail-hit",
+    type: "line",
+    source: "idf-rail",
+    layout: { visibility: "none" },
+    paint: {
+      "line-color": "#000000",
+      "line-width": 14,
+      "line-opacity": 0.001,
+    },
+  });
+
 
   // =========================
   // ✅ Layers de sélection (1 seule entité)
@@ -2541,6 +2534,13 @@ function resetContextLayers(map: MLMap) {
   setVis(map, "deps-outline", false);
   setVis(map, "rivers-line", false);
   setVis(map, "rail-line", false);
+  setVis(map, "rivers-hit", false);
+  setVis(map, "rail-hit", false);
+    if (map.getLayer("rivers-hit")) map.setFilter("rivers-hit", ["==", ["get", "ID"], "__none__"]);
+
+  if (map.getLayer("rail-hit"))
+    map.setFilter("rail-hit", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+
 
   // Et surtout: filtre impossible (sinon un autre handler peut ré-afficher)
   if (map.getLayer("idf-fill")) map.setFilter("idf-fill", ["==", ["get", "ID"], "__none__"]);
@@ -2564,7 +2564,7 @@ function showAvailableGeo(map: MLMap, payload: {
   hasIdf: boolean;
 }) {
 
-    const hasAny =
+      const hasAny =
     payload.hasIdf ||
     payload.depIds.length > 0 ||
     payload.riverIds.length > 0 ||
@@ -2574,6 +2574,7 @@ function showAvailableGeo(map: MLMap, payload: {
     resetContextLayers(map);
     return;
   }
+
 
   // On active les layers de contexte MAIS filtrés
   // (et on laisse les layers "*-selected-*" à part, pour quand tu sélectionnes UNE entité)
@@ -2604,37 +2605,50 @@ function showAvailableGeo(map: MLMap, payload: {
     map.setFilter("deps-outline", ["==", ["get", "ID"], "__none__"]);
   }
 
-  // Fleuves (ID)
-  if (payload.riverIds.length) {
+ // Fleuves (ID) — line + hitbox
+if (payload.riverIds.length) {
+  const filter = [
+    "in",
+    ["to-string", ["get", "ID"]],
+    ["literal", payload.riverIds.map(String)],
+  ] as any;
+
   setVis(map, "rivers-line", true);
   setVis(map, "rivers-hit", true);
 
-  const filter = [
-  "in",
-  ["get", "ID"],
-  ["literal", payload.riverIds.map(String)],
-] as any;
+  map.setFilter("rivers-line", filter);
+  map.setFilter("rivers-hit", filter);
+} else {
+  setVis(map, "rivers-line", false);
+  setVis(map, "rivers-hit", false);
 
-map.setFilter("rivers-line", filter);
-map.setFilter("rivers-hit", filter);
+  map.setFilter("rivers-line", ["==", ["get", "ID"], "__none__"]);
+  map.setFilter("rivers-hit", ["==", ["get", "ID"], "__none__"]);
 }
- else {
-    setVis(map, "rivers-line", false);
-    map.setFilter("rivers-line", ["==", ["get", "ID"], "__none__"]);
-  }
 
-  // Rail (OBJECTID_1)
-  if (payload.railIds.length) {
-    setVis(map, "rail-line", true);
-    map.setFilter("rail-line", [
-      "in",
-      ["to-string", ["get", "OBJECTID_1"]],
-      ["literal", payload.railIds.map(String)],
-    ]);
-  } else {
-    setVis(map, "rail-line", false);
-    map.setFilter("rail-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
-  }
+// Rail (OBJECTID_1) — line + hitbox
+if (payload.railIds.length) {
+  const filter = [
+    "in",
+    ["to-string", ["get", "OBJECTID_1"]],
+    ["literal", payload.railIds.map(String)],
+  ] as any;
+
+  setVis(map, "rail-line", true);
+  setVis(map, "rail-hit", true);
+
+  map.setFilter("rail-line", filter);
+  map.setFilter("rail-hit", filter);
+} else {
+  setVis(map, "rail-line", false);
+  setVis(map, "rail-hit", false);
+
+  map.setFilter("rail-line", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+  map.setFilter("rail-hit", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+}
+
+
+
 }
 
 
@@ -2700,6 +2714,11 @@ if (z < Z_CONTEXT_START) return;
     setVis(map, "deps-outline", false);
     setVis(map, "rivers-line", false);
     setVis(map, "rail-line", false);
+    setVis(map, "rivers-hit", false);
+setVis(map, "rail-hit", false);
+if (map.getLayer("rivers-hit")) map.setFilter("rivers-hit", ["==", ["get", "ID"], "__none__"]);
+if (map.getLayer("rail-hit")) map.setFilter("rail-hit", ["==", ["to-string", ["get", "OBJECTID_1"]], "__none__"]);
+
 
     // reset filtres (valeurs impossibles)
     if (map.getLayer("idf-fill")) map.setFilter("idf-fill", ["==", ["get", "ID"], "__none__"]);
