@@ -37,6 +37,10 @@ export default function ArtistesMap() {
 
   // markers photo
   const photoMarkersRef = useRef<maplibregl.Marker[]>([]);
+
+  // --- AJOUTE ICI ---
+  const allArtistesRef = useRef<ArtistePoint[]>([]);
+  
   // pour throttler les fetch
   const fetchTimerRef = useRef<number | undefined>(undefined);
   // garder les filtres à jour dans les callbacks map
@@ -95,42 +99,36 @@ export default function ArtistesMap() {
         source: "artistes",
         paint: {
           "circle-radius": 5,
-          "circle-color": "#2563eb",
+          "circle-color": "#b7e6ff",
           "circle-stroke-width": 1.2,
           "circle-stroke-color": "#ffffff",
         },
       });
 
       // interactions points
-      map.on("click", "artistes-points", (e) => {
-        const feats = map.queryRenderedFeatures(e.point, {
-          layers: ["artistes-points"],
-        }) as any[];
+     map.on("click", "artistes-points", (e) => {
+      const feats = map.queryRenderedFeatures(e.point, {
+        layers: ["artistes-points"],
+      }) as any[];
 
-        const f = feats?.[0];
-        if (!f) return;
+      const f = feats?.[0];
+      if (!f) return;
 
-        const p = f.properties ?? {};
+      const commune = f.properties?.commune_origine;
+      if (!commune) return;
 
-        const lng = Number(p.longitude);
-        const lat = Number(p.latitude);
+      const artistesCommune = allArtistesRef.current.filter(
+        (a) => (a.commune_origine ?? "").toLowerCase() === commune.toLowerCase()
+      );
 
-        const a: ArtistePoint = {
-          id: String(p.id),
-          artiste: p.artiste ?? null,
-          commune_origine: p.commune_origine ?? null,
-          style: p.style ?? null,
-          annee_de_naissance: p.annee_de_naissance ?? null,
-          latitude: Number.isFinite(lat) ? lat : null,
-          longitude: Number.isFinite(lng) ? lng : null,
-          lien: p.lien ?? null,
-          image_wikipedia: p.image_wikipedia ?? null,
-        };
+      if (!artistesCommune.length) return;
 
-        setSelectedArtiste(a);
-        setTab("presentation");
-        setSheetOpen(true);
-      });
+      setSelectedArtiste(null);
+      setListTitle(`Commune : ${commune}`);
+      setListItems(artistesCommune);
+      setTab("liste");
+      setSheetOpen(true);
+    });
 
       map.on("mouseenter", "artistes-points", () => (map.getCanvas().style.cursor = "pointer"));
       map.on("mouseleave", "artistes-points", () => (map.getCanvas().style.cursor = ""));
@@ -139,7 +137,7 @@ export default function ArtistesMap() {
       const schedule = () => {
         if (fetchTimerRef.current) window.clearTimeout(fetchTimerRef.current);
         fetchTimerRef.current = window.setTimeout(async () => {
-          await loadBBox(map, filtersRef.current, photoMarkersRef);
+          await loadBBox(map, filtersRef.current, photoMarkersRef, allArtistesRef);
         }, 250);
       };
 
@@ -163,7 +161,7 @@ export default function ArtistesMap() {
     const map = mapRef.current;
     if (!map) return;
 
-    void loadBBox(map, filters, photoMarkersRef);
+    void loadBBox(map, filters, photoMarkersRef, allArtistesRef);
   }, [filters]);
 
   return (
@@ -348,7 +346,7 @@ export default function ArtistesMap() {
                       <PresentationPanel artiste={selectedArtiste} />
                     ) : (
                       <ListPanel
-                        items={selectedArtiste ? [selectedArtiste] : listItems}
+                        items={listItems}
                         onPick={(a) => {
                           const map = mapRef.current;
                           if (!map) return;
@@ -837,7 +835,8 @@ function normalizeWikiUrl(raw: any) {
 async function loadBBox(
   map: maplibregl.Map,
   filters: Filters,
-  photoMarkersRef: React.MutableRefObject<maplibregl.Marker[]>
+  photoMarkersRef: React.MutableRefObject<maplibregl.Marker[]>,
+  allArtistesRef: React.MutableRefObject<ArtistePoint[]>
 ) {
   const b = map.getBounds();
   const url = new URL("/api/artistes-bbox", window.location.origin);
@@ -859,6 +858,8 @@ async function loadBBox(
       return filters.styles.some((f) => s.includes(f.toLowerCase()));
     });
   }
+
+  allArtistesRef.current = artistes;
 
   // update points
   const geojson = {
