@@ -5,6 +5,7 @@ import maplibregl, { Map as MLMap, LngLatBoundsLike } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import SongSearch, { SongSearchResult } from "./SongSearch";
 import PlaceSearch, { PlaceSearchResult } from "../../components/PlaceSearch";
+import AddressSearch, { AddressSearchResult } from "../../components/AddressSearch";
 
 type SongPoint = {
   id: string;
@@ -98,7 +99,8 @@ const depsGeoRef = useRef<GeoJSONFC | null>(null);
 const riversGeoRef = useRef<GeoJSONFC | null>(null);
 const railGeoRef = useRef<GeoJSONFC | null>(null);
 const geoForFiltersRef = useRef<{ idf: string[]; dep: string[]; river: string[]; rail: string[] } | null>(null);
-
+const [listQuery, setListQuery] = useState("");
+const [listSort, setListSort] = useState<"alpha" | "distance">("alpha");
 
   function coordKey(lng: number, lat: number) {
     return `${lng.toFixed(6)}|${lat.toFixed(6)}`;
@@ -231,8 +233,12 @@ useEffect(() => {
     filtersRef.current = filters;
   }, [filters]);
 
+
+  
   // Signature stable des filtres (pour déclencher un refetch même si la carte ne bouge pas)
+    
   const filtersKey = useMemo(() => {
+
     const norm = (arr: string[]) =>
       [...arr]
         .map((s) => s.trim())
@@ -249,6 +255,7 @@ useEffect(() => {
 
 const [topMode, setTopMode] = useState<"filter" | "search" | "contribute" | null>(null);
 const [placeMode, setPlaceMode] = useState<"song" | "place">("song");
+const [placeSearchKind, setPlaceSearchKind] = useState<"lyrics" | "address" | "nearby">("lyrics");
 
 function toggleTopMode(next: "filter" | "search" | "contribute") {
   setTopMode((cur) => (cur === next ? null : next));
@@ -265,6 +272,7 @@ const [tab, setTab] = useState<"lecture" | "paroles" | "liste">("lecture");
 const [selectedPlace, setSelectedPlace] = useState<string>("");
 
   const idfBounds: LngLatBoundsLike = useMemo(
+
     () => [
       [1.45, 48.12], // SW approx
       [3.55, 49.25], // NE approx
@@ -272,6 +280,38 @@ const [selectedPlace, setSelectedPlace] = useState<string>("");
     []
   );
 
+  const displayedSongs = useMemo(() => {
+  const base = (pointSongs.length > 0 ? pointSongs : placeSongs) ?? [];
+  let arr = [...base];
+
+  // 1) Tri
+  if (listSort === "distance") {
+    arr.sort(
+      (a: any, b: any) => (a.distance_km ?? 0) - (b.distance_km ?? 0)
+    );
+  } else {
+    // alpha sur full_title (fallback sur title)
+    arr.sort((a, b) =>
+      (a.full_title ?? a.title ?? "").localeCompare(
+        b.full_title ?? b.title ?? "",
+        "fr",
+        { sensitivity: "base" }
+      )
+    );
+  }
+
+  // 2) Filtre texte
+  const q = listQuery.trim().toLowerCase();
+  if (q.length > 0) {
+    arr = arr.filter((s: any) => {
+      const hay = `${s.full_title ?? s.title ?? ""} ${s.main_artist ?? s.artist_names ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  return arr;
+}, [pointSongs, placeSongs, listSort, listQuery]);
+  
   useEffect(() => {
     if (!mapDivRef.current) return;
 
@@ -336,7 +376,8 @@ const openGeo = async (kind: "idf" | "dep" | "river" | "rail", id: any, label: s
   setPlaceOffset((json.songs ?? []).length);
   setPlaceHasMore(Boolean(json.hasMore));
   setPlaceLoadingMore(false);
-
+setListQuery("");
+setListSort("alpha");
   setTab("liste");
   setSheetOpen(true);
   setSheetSnap("full");
@@ -456,6 +497,8 @@ map.on("zoom", () => applyVisibilityRules(map, pointsCount));
     setSelectedSong(null);
     setPointSongs(payload.songs);
     setSelectedPlaceLabel("Chansons à cet endroit");
+    setListQuery("");
+setListSort("alpha");
     setTab("liste");
     setSheetOpen(true);
     setSheetSnap("full");
@@ -737,172 +780,269 @@ if (hasPoint) {
         }}
       />
     ) : (
+
+
       <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur shadow-sm overflow-visible">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border)]">
-          <div className="text-[13px] font-semibold text-[color:var(--ink)]">
-            Recherche de lieu
-          </div>
+  <div className="px-3 py-2 border-b border-[color:var(--border)]">
+    <div className="text-[13px] font-semibold text-[color:var(--ink)]">
+      Recherche de lieu
+    </div>
 
-          <button
-            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-2 text-[12px] font-semibold text-[color:var(--ink)]"
-            onClick={async () => {
-              if (!navigator.geolocation) {
-                alert("La géolocalisation n'est pas disponible.");
-                return;
-              }
+    {/* 3 options */}
+    <div className="mt-2 grid grid-cols-3 gap-2">
+      <button
+        className={[
+          "rounded-xl border border-[color:var(--border)] px-2 py-2 text-[12px] font-semibold",
+          placeSearchKind === "lyrics"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "bg-white text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => setPlaceSearchKind("lyrics")}
+      >
+        Lieux cités
+      </button>
 
-              const success = async (pos: GeolocationPosition) => {
-  const lat = pos.coords.latitude;
-  const lng = pos.coords.longitude;
+      <button
+        className={[
+          "rounded-xl border border-[color:var(--border)] px-2 py-2 text-[12px] font-semibold",
+          placeSearchKind === "address"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "bg-white text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => setPlaceSearchKind("address")}
+      >
+        Adresse
+      </button>
 
-  const res = await fetch("/api/songs-nearby", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      lat,
-      lng,
-      radiusKm: 20,
-      limit: 100,
-      filters,
-    }),
-  });
+      <button
+        className={[
+          "rounded-xl border border-[color:var(--border)] px-2 py-2 text-[12px] font-semibold",
+          placeSearchKind === "nearby"
+            ? "bg-[color:var(--cardTint)] text-[color:var(--ink)]"
+            : "bg-white text-[color:var(--muted)]",
+        ].join(" ")}
+        onClick={() => setPlaceSearchKind("nearby")}
+      >
+        Autour de moi
+      </button>
+    </div>
+  </div>
 
-  if (!res.ok) return;
-  const json = await res.json();
+  <div className="p-2">
+    {/* OPTION 1 — lieux cités dans les paroles (ton existant) */}
+    {placeSearchKind === "lyrics" ? (
+      <PlaceSearch
+        filters={filters}
+        onSelect={async (p) => {
+          setPointSongs([]);
+          setPlaceSongs([]);
+          setSelectedSong(null);
 
-  setSelectedPlaceLabel("Autour de moi (20 km)");
-  setPlaceSongs(json.songs ?? []);
-  setPlaceTotal((json.songs ?? []).length);
-  setPlaceOffset((json.songs ?? []).length);
-  setPlaceHasMore(false);
-  setSelectedSong(null);
+          const map = mapRef.current;
+          if (!map) return;
 
-  setTab("liste");
-  setSheetOpen(true);
-  setSheetSnap("full");
+          setSelectedPlaceLabel(p.place);
+          clearSelectedPoint(map);
+          clearSelectedGeo(map);
 
-  const map = mapRef.current;
-  if (map) {
-    map.easeTo({
-      center: [lng, lat],
-      zoom: Math.max(map.getZoom(), 12),
-      duration: 650,
-    });
-  }
-};
+          const res = await fetch("/api/songs-by-place", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              place: p.place,
+              filters,
+              offset: 0,
+              limit: PLACE_PAGE_SIZE,
+            }),
+          });
 
-const fail = (err: GeolocationPositionError) => {
-  console.error("Geolocation error:", err.code, err.message);
+          if (!res.ok) return;
+          const json = await res.json();
 
-  // ✅ Si high accuracy échoue (timeout/position indispo), on retente en mode plus permissif (iPhone-friendly)
-  const shouldRetry =
-    err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE;
+          setPlaceSongs(json.songs ?? []);
+          setSelectedSong(null);
+          setPlaceTotal(json.total ?? 0);
+          setPlaceOffset((json.songs ?? []).length);
+          setPlaceHasMore(Boolean(json.hasMore));
+          setPlaceLoadingMore(false);
 
-  if (shouldRetry) {
-    navigator.geolocation.getCurrentPosition(
-      success,
-      (err2) => {
-        console.error("Geolocation retry error:", err2.code, err2.message);
-        alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
-      },
-      {
-        enableHighAccuracy: false,
-        timeout: 20000,
-        maximumAge: 60000,
-      }
-    );
-    return;
-  }
+          setListQuery("");
+setListSort("alpha");
+          setTab("liste");
+          setSheetOpen(true);
+          setSheetSnap("full");
 
-  // Permission refusée ou autre
-  alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
-};
+          // Si le lieu correspond à une entité geo, on n'affiche que CETTE entité
+          const kind = kindFromRow(p.echelle ?? null, p.echelle2 ?? null, p.sous_type ?? null);
+          if (kind && p.anciens_id) {
+            showSelectedGeo({
+              map,
+              kind,
+              anciensId: p.anciens_id,
+              idfGeo: idfGeoRef.current,
+              depsGeo: depsGeoRef.current,
+              riversGeo: riversGeoRef.current,
+              railGeo: railGeoRef.current,
+            });
+            return;
+          }
 
-navigator.geolocation.getCurrentPosition(success, fail, {
-  enableHighAccuracy: true,
-  timeout: 20000,     // ✅ iOS a souvent besoin de plus
-  maximumAge: 60000,  // ✅ accepte une position récente (très utile sur iOS)
-});
+          if (json.center && Array.isArray(json.center)) {
+            map.easeTo({
+              center: json.center,
+              zoom: Math.max(map.getZoom(), 12),
+              duration: 650,
+            });
+          }
+        }}
+      />
+    ) : null}
 
-            }}
-          >
-            Autour de moi
-          </button>
-        </div>
+    {/* OPTION 2 — recherche par adresse (nouveau) */}
+    {placeSearchKind === "address" ? (
+      <AddressSearch
+        onSelect={async (addr) => {
+          const map = mapRef.current;
+          if (!map) return;
 
-        <div className="p-2">
-          <PlaceSearch
-            filters={filters}
-            onSelect={async (p) => {
-              setPointSongs([]);      // ✅ important : sinon la liste affichera encore pointSongs
-setPlaceSongs([]);      // optionnel mais propre (évite flash d'ancienne liste)
-setSelectedSong(null);  // optionnel (tu le fais déjà plus bas)
+          // 1) zoom sur l’adresse + petit “highlight” (point sélectionné)
+          clearSelectedGeo(map);
+          clearSelectedPoint(map);
+          map.easeTo({
+            center: [addr.lng, addr.lat],
+            zoom: Math.max(map.getZoom(), 14),
+            duration: 650,
+          });
+          setSelectedPoint(map, addr.lng, addr.lat, { kind: "address" });
 
-              const map = mapRef.current;
-              if (!map) return;
-              setPointSongs([]);         // ✅ reset liste “point”
-setPlaceSongs([]);         // ✅ reset liste “place” (optionnel)
-setSelectedSong(null);     // ✅ reset sélection (optionnel)
-setSelectedPlaceLabel(p.place);
+          // 2) requête “chansons autour” (20 km) triées par distance via ton RPC
+          const res = await fetch("/api/songs-nearby", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lat: addr.lat,
+              lng: addr.lng,
+              radiusKm: 20,
+              limit: 200,
+              filters,
+            }),
+          });
 
+          if (!res.ok) return;
+          const json = await res.json();
 
-              setSelectedPlaceLabel(p.place);
-clearSelectedPoint(map);
-clearSelectedGeo(map);
+          setSelectedPlaceLabel(`Autour de l’adresse (20 km)`);
+          setPlaceSongs(json.songs ?? []);
+          setPlaceTotal((json.songs ?? []).length);
+          setPlaceOffset((json.songs ?? []).length);
+          setPlaceHasMore(false);
+          setSelectedSong(null);
 
-              const res = await fetch("/api/songs-by-place", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  place: p.place,
-                  filters,
-                  offset: 0,
-                  limit: PLACE_PAGE_SIZE,
-                }),
+          // 3) ouverture directe de l’onglet “Liste”
+          setListQuery("");
+setListSort("distance");
+          setTab("liste");
+          setSheetOpen(true);
+          setSheetSnap("full");
+        }}
+      />
+    ) : null}
+
+    {/* OPTION 3 — autour de moi (ton existant, juste déplacé ici) */}
+    {placeSearchKind === "nearby" ? (
+      <button
+        className="w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3 text-[13px] font-semibold text-[color:var(--ink)]"
+        onClick={async () => {
+          if (!navigator.geolocation) {
+            alert("La géolocalisation n'est pas disponible.");
+            return;
+          }
+
+          const success = async (pos: GeolocationPosition) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+
+            const res = await fetch("/api/songs-nearby", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lat,
+                lng,
+                radiusKm: 20,
+                limit: 100,
+                filters,
+              }),
+            });
+
+            if (!res.ok) return;
+            const json = await res.json();
+
+            setSelectedPlaceLabel("Autour de moi (20 km)");
+            setPlaceSongs(json.songs ?? []);
+            setPlaceTotal((json.songs ?? []).length);
+            setPlaceOffset((json.songs ?? []).length);
+            setPlaceHasMore(false);
+            setSelectedSong(null);
+
+            setListQuery("");
+setListSort("distance");
+            setTab("liste");
+            setSheetOpen(true);
+            setSheetSnap("full");
+
+            const map = mapRef.current;
+            if (map) {
+              clearSelectedGeo(map);
+              clearSelectedPoint(map);
+              map.easeTo({
+                center: [lng, lat],
+                zoom: Math.max(map.getZoom(), 12),
+                duration: 650,
               });
+              setSelectedPoint(map, lng, lat, { kind: "nearby" });
+            }
+          };
 
-              if (!res.ok) return;
-              const json = await res.json();
+          const fail = (err: GeolocationPositionError) => {
+            console.error("Geolocation error:", err.code, err.message);
 
-              setPlaceSongs(json.songs ?? []);
-              setSelectedSong(null);
-              setPlaceTotal(json.total ?? 0);
-              setPlaceOffset((json.songs ?? []).length);
-              setPlaceHasMore(Boolean(json.hasMore));
-              setPlaceLoadingMore(false);
+            const shouldRetry =
+              err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE;
 
-              setTab("liste");
-              setSheetOpen(true);
-              setSheetSnap("full");
+            if (shouldRetry) {
+              navigator.geolocation.getCurrentPosition(
+                success,
+                (err2) => {
+                  console.error("Geolocation retry error:", err2.code, err2.message);
+                  alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
+                },
+                {
+                  enableHighAccuracy: false,
+                  timeout: 20000,
+                  maximumAge: 60000,
+                }
+              );
+              return;
+            }
 
-// ✅ Si le lieu correspond à une entité geo, on n'affiche que CETTE entité
-const kind = kindFromRow(p.echelle ?? null, p.echelle2 ?? null, p.sous_type ?? null);
-if (kind && p.anciens_id) {
-  showSelectedGeo({
-    map,
-    kind,
-    anciensId: p.anciens_id,
-    idfGeo: idfGeoRef.current,
-    depsGeo: depsGeoRef.current,
-    riversGeo: riversGeoRef.current,
-    railGeo: railGeoRef.current,
-  });
-  return; // ✅ on évite d'utiliser json.center (on a déjà fitBounds sur l'entité)
-}
+            alert("Impossible d’obtenir la position. Autorise la localisation dans Safari.");
+          };
 
-
-              if (json.center && Array.isArray(json.center)) {
-                map.easeTo({
-                  center: json.center,
-                  zoom: Math.max(map.getZoom(), 12),
-                  duration: 650,
-                });
-              }
-            }}
-          />
-        </div>
-      </div>
-    )}
+          navigator.geolocation.getCurrentPosition(success, fail, {
+            enableHighAccuracy: true,
+            timeout: 20000,
+            maximumAge: 60000,
+          });
+        }}
+      >
+        Utiliser ma position (rayon 20 km)
+      </button>
+    ) : null}
+  </div>
+</div>
+    
+  )
+    }
   </>
 ) : null}
 
@@ -1096,8 +1236,26 @@ if (kind && p.anciens_id) {
               {pointSongs.length > 0 ? " chanson(s)" : ` / ${placeTotal.toLocaleString("fr-FR")} chansons`}
             </div>
 
+<div className="mt-3">
+  <div className="rounded-2xl border border-[color:var(--border)] bg-white/80 backdrop-blur px-3 py-2 shadow-sm">
+    <input
+      value={listQuery}
+      onChange={(e) => setListQuery(e.target.value)}
+      placeholder="Rechercher dans la liste (titre / artiste)"
+      className="w-full bg-transparent outline-none text-[13px] text-[color:var(--ink)] placeholder:text-[color:var(--muted)]"
+    />
+  </div>
+
+  <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+    {displayedSongs.length.toLocaleString("fr-FR")} résultat(s)
+    {listQuery.trim().length > 0
+      ? ` sur ${(pointSongs.length > 0 ? pointSongs.length : placeSongs.length).toLocaleString("fr-FR")}`
+      : ""}
+  </div>
+</div>
+
             <div className="mt-3 space-y-2">
-              {(pointSongs.length > 0 ? pointSongs : placeSongs).map((s) => (
+              {displayedSongs.map((s) => (
                 <button
                   key={s.id}
                   className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3"
@@ -1903,6 +2061,7 @@ function FiltersPanel({
   const [styleInput, setStyleInput] = useState("");
   const [languageInput, setLanguageInput] = useState("");
   const [languageOptions, setLanguageOptions] = useState<{ label: string; count: number }[]>([]);
+
 
   const [artistOpen, setArtistOpen] = useState(false);
 const [styleOpen, setStyleOpen] = useState(false);
