@@ -72,7 +72,7 @@ export default async function HomePage() {
 
             <PrimaryButton
               href="/parcours"
-              title="Parcours musicaux"
+              title="Géoplaylists"
               subtitle="Des itinéraires thématiques à suivre."
             />
           </section>
