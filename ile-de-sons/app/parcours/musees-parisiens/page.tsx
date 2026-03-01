@@ -182,9 +182,6 @@ function SongBlock({
                   __html: highlightAll(excerpt, place),
                 }}
               />
-              <div className="mt-2 text-[12px] font-semibold text-[color:var(--primary)]">
-                Voir le passage →
-              </div>
             </div>
           )}
         </div>
