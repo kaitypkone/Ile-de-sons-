@@ -38,7 +38,7 @@ export default function ArtistesMap() {
   // markers photo
   const photoMarkersRef = useRef<maplibregl.Marker[]>([]);
 
-  // --- AJOUTE ICI ---
+  // --- 
   const allArtistesRef = useRef<ArtistePoint[]>([]);
   
   // pour throttler les fetch
@@ -569,20 +569,51 @@ function ListPanel({ items, onPick }: { items: ArtistePoint[]; onPick: (a: Artis
 
   return (
     <div className="p-3 space-y-2">
-      {items.map((a) => (
-        <button
-          key={a.id}
-          className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-[color:var(--cardTint)] px-3 py-3"
-          onClick={() => onPick(a)}
-          type="button"
-        >
-          <div className="text-[13px] font-semibold text-[color:var(--ink)]">{a.artiste ?? "—"}</div>
-          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-            {a.commune_origine ?? "—"}
-            {typeof a.distance_km === "number" ? ` · ${a.distance_km.toFixed(1).replace(".", ",")} km` : ""}
+    {/* --- groupement par style --- */}
+    {(() => {
+      // 1️⃣ regroupe les artistes par style
+      const grouped: Record<string, ArtistePoint[]> = {};
+      items.forEach((a) => {
+        const style = a.style ?? "Autres styles";
+        if (!grouped[style]) grouped[style] = [];
+        grouped[style].push(a);
+      });
+
+      // 2️⃣ trie les styles par ordre alphabétique
+      const sortedStyles = Object.keys(grouped).sort((a, b) =>
+        a.toLowerCase().localeCompare(b.toLowerCase())
+      );
+
+      // 3️⃣ affichage
+      return sortedStyles.map((style) => (
+        <div key={style}>
+          {/* titre du style */}
+          <div className="px-3 py-1 bg-[color:var(--cardTint)] font-semibold text-[color:var(--ink)] rounded-xl mt-2">
+            {style}
           </div>
-        </button>
-      ))}
+
+          {/* artistes pour ce style */}
+          <div className="space-y-1 mt-1">
+            {grouped[style]
+              .slice()
+              .sort((a, b) =>
+                (a.artiste ?? "").toLowerCase().localeCompare((b.artiste ?? "").toLowerCase())
+              )
+              .map((a) => (
+                <button
+                  key={a.id}
+                  className="w-full text-left rounded-2xl border border-[color:var(--border)] bg-white px-3 py-2"
+                  onClick={() => onPick(a)}
+                  type="button"
+                >
+                  <div className="text-[13px] font-semibold text-[color:var(--ink)]">{a.artiste ?? "—"}</div>
+                  <div className="text-[12px] text-[color:var(--muted)]">{a.commune_origine ?? "—"}</div>
+                </button>
+              ))}
+          </div>
+        </div>
+      ));
+    })()}
     </div>
   );
 }
